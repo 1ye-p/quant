@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS gold_portfolio_snapshots (
     trade_date          DATE NOT NULL,
     cash                DOUBLE NOT NULL,
     nav                 DOUBLE NOT NULL,
+    portfolio_return    DOUBLE,
     positions_count     INTEGER DEFAULT 0,
     gross_exposure      DOUBLE DEFAULT 0,
     net_exposure        DOUBLE DEFAULT 0,

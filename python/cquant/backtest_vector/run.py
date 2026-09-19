@@ -150,6 +150,7 @@ def _ensure_run_schema_extensions(catalog: Catalog) -> None:
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS is_walk_forward BOOLEAN DEFAULT FALSE",
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS n_folds INTEGER",
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS aggregated_metrics_json JSON",
+        "ALTER TABLE gold_portfolio_snapshots ADD COLUMN IF NOT EXISTS portfolio_return DOUBLE",
     ]:
         try:
             catalog.execute(ddl)
@@ -1373,31 +1374,35 @@ class BacktestRunner:
             logger.warning("Failed to persist signals: %s", exc)
 
     def _persist_fills(self, result, run_id: str) -> None:
-        """Write order fills to gold_fills."""
+        """Write order fills to gold_fills.
+
+        Failures are surfaced (error log + ``fills_persisted=false`` stamped
+        into the run's tags) instead of being swallowed at warning level.
+        """
         fills = result.fills
         if fills.is_empty():
             return
 
         import uuid as _uuid
 
-        rows = []
-        for row in fills.iter_rows(named=True):
-            rows.append((
-                str(_uuid.uuid4()),
-                run_id,
-                str(row["trade_date"]),
-                row["asset_id"],
-                row["side"],
-                int(row["qty"]),
-                float(row["price"]),
-                float(row["notional"]),
-                float(row.get("commission", 0) or 0),
-                float(row.get("stamp_duty", 0) or 0),
-                float(row.get("slippage", 0) or 0),
-                float(row.get("total_cost", 0) or 0),
-                float(row.get("raw_close") or 0) or None,
-            ))
         try:
+            rows = []
+            for row in fills.iter_rows(named=True):
+                rows.append((
+                    str(_uuid.uuid4()),
+                    run_id,
+                    str(row["trade_date"]),
+                    row["asset_id"],
+                    row["side"],
+                    int(row["qty"]),
+                    float(row["price"]),
+                    float(row["notional"]),
+                    float(row.get("commission", 0) or 0),
+                    float(row.get("stamp_duty", 0) or 0),
+                    float(row.get("slippage", 0) or 0),
+                    float(row.get("total_cost", 0) or 0),
+                    float(row.get("raw_close") or 0) or None,
+                ))
             self._catalog.upsert(
                 "gold_fills",
                 ["fill_id", "run_id", "trade_date", "asset_id", "side", "qty",
@@ -1408,7 +1413,38 @@ class BacktestRunner:
             )
             logger.info("Persisted %d fills to gold_fills", len(rows))
         except Exception as exc:
-            logger.warning("Failed to persist fills: %s", exc)
+            logger.error(
+                "Failed to persist %d fills to gold_fills for run %s: %s",
+                fills.height, run_id, exc, exc_info=True,
+            )
+            self._mark_fills_persist_failure(run_id, exc)
+
+    def _mark_fills_persist_failure(self, run_id: str, exc: Exception) -> None:
+        """Stamp ``fills_persisted=false`` + error summary into the run's tags."""
+        try:
+            tags_row = self._catalog.query(
+                "SELECT tags FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+            )
+            tags: dict = {}
+            if not tags_row.is_empty():
+                raw = tags_row["tags"][0]
+                if raw:
+                    try:
+                        parsed = json.loads(raw)
+                        if isinstance(parsed, dict):
+                            tags = parsed
+                    except (TypeError, ValueError):
+                        tags = {}
+            tags["fills_persisted"] = False
+            tags["fills_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            self._catalog.execute(
+                "UPDATE gold_backtest_runs SET tags = ? WHERE run_id = ?",
+                [json.dumps(tags), run_id],
+            )
+        except Exception as mark_exc:
+            logger.error(
+                "Failed to stamp fills_persisted=false for run %s: %s", run_id, mark_exc
+            )
 
     def _persist_portfolio_snapshots(self, result, run_id: str) -> None:
         """Write portfolio snapshots to gold_portfolio_snapshots."""
@@ -1449,6 +1485,7 @@ class BacktestRunner:
                 "trade_date": row["trade_date"],
                 "cash": max(0.0, nav - gross_exp),
                 "nav": nav,
+                "portfolio_return": ret,
                 "positions_count": pos_count,
                 "gross_exposure": gross_exp,
                 "net_exposure": net_exp,
@@ -1461,14 +1498,15 @@ class BacktestRunner:
         for s in snapshots:
             rows.append((
                 s["snapshot_id"], s["run_id"], str(s["trade_date"]),
-                s["cash"], s["nav"], s["positions_count"],
+                s["cash"], s["nav"], s["portfolio_return"], s["positions_count"],
                 s["gross_exposure"], s["net_exposure"],
             ))
         try:
             self._catalog.upsert(
                 "gold_portfolio_snapshots",
                 ["snapshot_id", "run_id", "trade_date", "cash", "nav",
-                 "positions_count", "gross_exposure", "net_exposure"],
+                 "portfolio_return", "positions_count", "gross_exposure",
+                 "net_exposure"],
                 rows,
                 ["snapshot_id"],
             )

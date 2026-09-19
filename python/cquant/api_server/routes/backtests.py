@@ -1320,8 +1320,8 @@ def _compute_implementation_shortfall(catalog, run_id: str) -> dict:
     asset_ph = ",".join(["?" for _ in asset_ids])
     prices_df = catalog.query(
         f"SELECT trade_date, asset_id, open, close FROM silver_prices_1d "
-        f"WHERE asset_id IN ({asset_ph}) AND trade_date >= date_add(?, INTERVAL -10 DAY) "
-        f"AND trade_date <= ? ORDER BY asset_id, trade_date",
+        f"WHERE asset_id IN ({asset_ph}) AND trade_date >= (?::DATE - INTERVAL 10 DAY) "
+        f"AND trade_date <= ?::DATE ORDER BY asset_id, trade_date",
         asset_ids + [min_date, max_date],
     )
     if prices_df.is_empty():
@@ -1923,7 +1923,7 @@ async def export_backtest_report(
 
     # 6. 最近 20 笔交易
     fills_df = catalog.query(
-        "SELECT trade_date, asset_id, side, quantity, price FROM gold_fills "
+        "SELECT trade_date, asset_id, side, qty, price FROM gold_fills "
         "WHERE run_id = ? ORDER BY trade_date DESC LIMIT 20",
         [run_id],
     )

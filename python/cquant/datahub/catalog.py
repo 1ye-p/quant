@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -33,6 +35,56 @@ _DDL_FILES = [
     "sql/duckdb/knowledge.sql",
     "sql/duckdb/meta.sql",
 ]
+
+# DuckDB WAL replay-failure signatures. Observed examples:
+#   "IO Error: Failure while replaying WAL file ...: Corrupt WAL file: ...
+#    computed checksum ... does not match stored checksum ..."
+#   "Internal Error: ... WriteAheadLog ..."
+# Deliberately narrow: plain IO errors (missing file, permissions, directory)
+# must NOT match — see test_self_heal_no_false_positive.
+_WAL_CORRUPTION_SIGNATURES = (
+    "writeaheadlog",
+    "wal file",
+    "replaying wal",
+    "replay wal",
+    "internal error",
+)
+
+_DEFAULT_CHECKPOINT_INTERVAL_SEC = 600.0
+
+
+def _is_wal_corruption_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a DuckDB WAL replay/corruption failure."""
+    msg = str(exc).lower()
+    return any(sig in msg for sig in _WAL_CORRUPTION_SIGNATURES)
+
+
+def _self_heal_wal(db_path: Path) -> bool:
+    """Quarantine a corrupt WAL file so the caller can retry the connection.
+
+    Renames ``<db>.wal`` to ``<db>.wal.corrupt-<unix_ts>``. Returns True if a
+    WAL was quarantined (caller should retry the connection), False otherwise
+    (no WAL, empty WAL, or rename failed).
+    """
+    wal = Path(str(db_path) + ".wal")
+    if not wal.exists() or wal.stat().st_size == 0:
+        return False
+    backup = wal.with_name(f"{wal.name}.corrupt-{int(time.time())}")
+    try:
+        wal.rename(backup)
+    except OSError as rename_exc:
+        logger.error(
+            "WAL self-heal failed: could not quarantine %s: %s", wal, rename_exc
+        )
+        return False
+    logger.error(
+        "检测到 WAL 损坏已隔离，上次未落盘写入可能丢失，备份于 %s "
+        "(WAL corruption detected and quarantined; un-checkpointed writes may "
+        "be lost; backup at %s)",
+        backup,
+        backup,
+    )
+    return True
 
 
 @contextmanager
@@ -116,6 +168,9 @@ class Catalog:
         read_only: bool = False,
     ) -> None:
         self._repo_root = Path(repo_root) if repo_root else Path.cwd()
+        self._stop_event: threading.Event | None = None
+        self._checkpoint_thread: threading.Thread | None = None
+        self._checkpoint_interval: float = 0.0
         if backend is not None:
             self._backend: CatalogBackend = backend
             self._db_path = Path(db_path)
@@ -123,13 +178,94 @@ class Catalog:
             self._db_path = Path(db_path)
             if not read_only:
                 self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            from cquant.datahub.backends.duckdb_backend import DuckDBBackend
-
-            self._backend = DuckDBBackend(str(self._db_path), read_only=read_only)
+            self._backend = self._connect_duckdb_with_self_heal(
+                str(self._db_path), read_only=read_only
+            )
+            if not read_only:
+                self._start_checkpoint_thread()
 
     def _get_conn(self):
         """Compatibility shim — returns the raw backend connection if available."""
         return getattr(self._backend, "_conn", None)
+
+    # ------------------------------------------------------------------
+    # Connection self-heal (WAL governance)
+    # ------------------------------------------------------------------
+
+    def _connect_duckdb_with_self_heal(self, db_path: str, read_only: bool):
+        """Open a DuckDB backend, quarantining a corrupt WAL and retrying once.
+
+        Both CLI and API obtain their connection through :class:`Catalog`, so
+        self-healing here covers both entry points automatically.
+        """
+        from cquant.datahub.backends.duckdb_backend import DuckDBBackend
+
+        try:
+            return DuckDBBackend(db_path, read_only=read_only)
+        except Exception as exc:
+            if read_only or not _is_wal_corruption_error(exc):
+                raise
+            if not _self_heal_wal(self._db_path):
+                raise
+            try:
+                return DuckDBBackend(db_path, read_only=read_only)
+            except Exception as retry_exc:
+                raise CatalogError(
+                    f"Catalog connect failed even after WAL self-heal. "
+                    f"WAL backup is next to {db_path} (*.wal.corrupt-<ts>). "
+                    f"Retry error: {retry_exc}"
+                ) from retry_exc
+
+    # ------------------------------------------------------------------
+    # Periodic CHECKPOINT (WAL governance)
+    # ------------------------------------------------------------------
+
+    def _start_checkpoint_thread(self) -> None:
+        """Start the periodic CHECKPOINT daemon thread.
+
+        Interval comes from ``CQUANT_CHECKPOINT_INTERVAL_SEC`` (default 600s);
+        0 or negative disables periodic checkpointing entirely.
+        """
+        raw = os.environ.get("CQUANT_CHECKPOINT_INTERVAL_SEC")
+        try:
+            interval = (
+                float(raw) if raw is not None else _DEFAULT_CHECKPOINT_INTERVAL_SEC
+            )
+        except ValueError:
+            logger.warning(
+                "Invalid CQUANT_CHECKPOINT_INTERVAL_SEC=%r, using default %ss",
+                raw,
+                _DEFAULT_CHECKPOINT_INTERVAL_SEC,
+            )
+            interval = _DEFAULT_CHECKPOINT_INTERVAL_SEC
+        if interval <= 0:
+            logger.info("Periodic catalog CHECKPOINT disabled (interval=%s)", raw)
+            return
+        self._checkpoint_interval = interval
+        self._stop_event = threading.Event()
+        self._checkpoint_thread = threading.Thread(
+            target=self._checkpoint_loop,
+            name="cquant-catalog-checkpoint",
+            daemon=True,
+        )
+        self._checkpoint_thread.start()
+        logger.info(
+            "Periodic catalog CHECKPOINT started (interval=%ss, db=%s)",
+            interval,
+            self._db_path,
+        )
+
+    def _checkpoint_loop(self) -> None:
+        assert self._stop_event is not None
+        while not self._stop_event.wait(self._checkpoint_interval):
+            try:
+                self.checkpoint()
+            except Exception as exc:  # never kill the loop
+                logger.error("Periodic catalog CHECKPOINT failed: %s", exc)
+
+    def checkpoint(self) -> None:
+        """Force a DuckDB CHECKPOINT — flushes the WAL into the database file."""
+        self._backend.execute("CHECKPOINT")
 
     def initialize(self) -> None:
         """Execute all DDL scripts to create tables if they do not exist."""
@@ -403,6 +539,16 @@ CREATE TABLE IF NOT EXISTS meta_model_registry (
         return self.query("SELECT * FROM meta_model_registry")
 
     def close(self) -> None:
+        """Stop the checkpoint thread and close the backend connection.
+
+        DuckDB checkpoints (and removes) the WAL file on clean connection
+        close, so closing the catalog is what keeps ``catalog.duckdb.wal``
+        from lingering between runs.
+        """
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
+            self._checkpoint_thread.join(timeout=5)
         self._backend.close()
 
     def __enter__(self) -> "Catalog":

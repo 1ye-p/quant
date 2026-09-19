@@ -111,6 +111,17 @@ async def _lifespan(app: FastAPI):
             logger.info("DataScheduler shut down cleanly")
         except Exception as exc:
             logger.debug("DataScheduler shutdown error: %s", exc)
+    # WAL governance: close the catalog DuckDB connection cleanly — DuckDB
+    # checkpoints and removes the .wal file on close. Never block exit, but
+    # make failures visible.
+    try:
+        from cquant.api_server.deps import _get_catalog, get_catalog
+
+        get_catalog().close()
+        _get_catalog.cache_clear()
+        logger.info("Catalog closed cleanly on shutdown (WAL checkpointed)")
+    except Exception as exc:
+        logger.error("catalog close on shutdown failed: %s", exc)
 
 
 def create_app(

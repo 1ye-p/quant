@@ -227,6 +227,9 @@ class BacktestRunSpec:
     # MultiFactor missing-factor handling
     missing_factor_strategy: str = "fill_0"
     penalty_per_missing: float = 0.5
+    # MultiFactor explicit weights (from UI strategy config). None = legacy
+    # single-factor fallback {sort_factor: 1.0} (bit-for-backward-compatible).
+    factor_weights: dict[str, float] | None = None
     # BreakoutPullback params
     breakout_config: dict = field(default_factory=dict)
     # Local RNG seed — propagated to BacktestSpec.random_seed for reproducible,
@@ -1085,9 +1088,20 @@ class BacktestRunner:
             )
         if spec.strategy_type == "MultiFactor":
             from cquant.backtest_vector.strategies.multi_factor import MultiFactorStrategy
+            # Legacy strategies (no factor_weights): historical single-factor
+            # fallback {sort_factor: 1.0}, unchanged.
+            if spec.factor_weights is None:
+                mf_weights: dict[str, float] = {spec.sort_factor: 1.0}
+            else:
+                if all(w == 0 for w in spec.factor_weights.values()):
+                    raise ValueError(
+                        f"factor_weights 全为零: {spec.factor_weights} — "
+                        "合成得分恒为 0，请配置非零权重"
+                    )
+                mf_weights = dict(spec.factor_weights)
             return MultiFactorStrategy(
                 strategy_id=spec.strategy_id,
-                factor_weights={spec.sort_factor: 1.0},
+                factor_weights=mf_weights,
                 top_n=spec.top_n,
                 missing_factor_strategy=spec.missing_factor_strategy,
                 penalty_per_missing=spec.penalty_per_missing,

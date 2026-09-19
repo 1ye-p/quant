@@ -245,6 +245,8 @@ class BacktestCreateBody(BaseModel):
     # MultiFactor missing-factor handling
     missing_factor_strategy: str = "fill_0"
     penalty_per_missing: float = 0.5
+    # MultiFactor weights (UI strategy config -> engine). None = legacy fallback.
+    factor_weights: dict[str, float] | None = None
     # BreakoutPullback params
     breakout_config: dict | None = None
 
@@ -255,6 +257,38 @@ def _run_backtest(catalog, spec):
 
     runner = BacktestRunner(catalog)
     return runner.run(spec)
+
+
+def _validate_factor_weights(
+    factor_weights: dict[str, float] | None,
+    factors: list[str],
+) -> dict[str, float] | None:
+    """Validate factor_weights against the strategy's factor list.
+
+    Rules:
+    - None (legacy strategies without weights) passes through unchanged.
+    - Every key must be in the strategy's factors list — unknown keys are
+      rejected (with a warning log) rather than silently ignored.
+    - All-zero weights are rejected (degenerate composite score).
+
+    Raises ValueError on invalid input.
+    """
+    if factor_weights is None:
+        return None
+    if not factor_weights:
+        raise ValueError("factor_weights 不能为空：请在策略配置中为各因子设置权重")
+    unknown = [k for k in factor_weights if k not in factors]
+    if unknown:
+        logger.warning(
+            "factor_weights 包含策略 factors 之外的因子（将被拒绝）: %s (factors=%s)",
+            unknown, factors,
+        )
+        raise ValueError(
+            f"factor_weights 含无效因子: {unknown}，不在策略因子列表 {factors} 中"
+        )
+    if all(w == 0 for w in factor_weights.values()):
+        raise ValueError("factor_weights 全为零：合成得分恒为 0，请设置非零权重")
+    return factor_weights
 
 
 def _load_metrics(path: pathlib.Path) -> dict:
@@ -285,6 +319,16 @@ async def create_backtest(
     sort_factor = body.sort_factor if body.sort_factor != "ret_20d" else (
         parsed.get("factors", ["ret_20d"])[0] if parsed.get("factors") else "ret_20d"
     )
+
+    # MultiFactor weights: request body first, then strategy config (UI stores
+    # factor_weights here). None for legacy strategies → engine falls back to
+    # the historical {sort_factor: 1.0} behavior.
+    cfg_factors = list(parsed.get("factors", []))
+    factor_weights_raw = body.factor_weights or parsed.get("factor_weights")
+    try:
+        factor_weights = _validate_factor_weights(factor_weights_raw, cfg_factors)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # ML strategy params: read from strategy config first, then request body
     strategy_type = body.strategy_type if body.strategy_type != "StaticTopN" else parsed.get("strategy_type", "StaticTopN")
@@ -481,6 +525,7 @@ async def create_backtest(
         missing_factor_strategy=missing_factor_strategy,
         penalty_per_missing=penalty_per_missing,
         breakout_config=body.breakout_config or parsed.get("breakout_config", {}),
+        factor_weights=factor_weights,
     )
 
     _ensure_schema_extensions(catalog)

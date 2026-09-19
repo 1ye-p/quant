@@ -211,4 +211,4 @@ def is_meaningful_scale_history(scales: list[float]) -> bool:
     """A run 'has regime' when scale history exists and is not constant 1.0."""
     if not scales:
         return False
-    return any(not math.isclose(float(s), 1.0, abs_tol=1e-9) for s in scales)
+    return any(s is not None and not math.isclose(float(s), 1.0, abs_tol=1e-9) for s in scales)

@@ -15,6 +15,9 @@ interface CompareMetrics {
   sortino_ratio: number;
 }
 
+/** Numeric metric columns only (excludes the string identifier columns). */
+type MetricKey = Exclude<keyof CompareMetrics, 'backtest_id' | 'strategy_name'>;
+
 interface CompareMetricsTableProps {
   metrics: CompareMetrics[];
 }
@@ -23,25 +26,28 @@ export const CompareMetricsTable: React.FC<CompareMetricsTableProps> = ({ metric
   const { t } = useTranslation();
   if (metrics.length === 0) return null;
 
-  const rows = [
-    { key: 'total_return', label: t('common.metric.total_return'), format: (v: number) => `${(v * 100).toFixed(1)}%`, higher: true },
-    { key: 'annualized_return', label: t('common.metric.annualized_return'), format: (v: number) => `${(v * 100).toFixed(1)}%`, higher: true },
-    { key: 'sharpe_ratio', label: t('common.metric.sharpe_ratio'), format: (v: number) => v.toFixed(2), higher: true },
-    { key: 'max_drawdown', label: t('common.metric.max_drawdown'), format: (v: number) => `${(v * 100).toFixed(1)}%`, higher: false },
-    { key: 'win_rate', label: t('common.metric.win_rate'), format: (v: number) => `${(v * 100).toFixed(0)}%`, higher: true },
-    { key: 'calmar_ratio', label: t('common.metric.calmar_ratio'), format: (v: number) => v.toFixed(2), higher: true },
-    { key: 'sortino_ratio', label: t('common.metric.sortino_ratio'), format: (v: number) => v.toFixed(2), higher: true },
+  const rows: Array<{ key: MetricKey; label: string; format: (v: number) => string; higher: boolean }> = [
+    { key: 'total_return', label: t('common.metric.total_return'), format: (v) => `${(v * 100).toFixed(1)}%`, higher: true },
+    { key: 'annualized_return', label: t('common.metric.annualized_return'), format: (v) => `${(v * 100).toFixed(1)}%`, higher: true },
+    { key: 'sharpe_ratio', label: t('common.metric.sharpe_ratio'), format: (v) => v.toFixed(2), higher: true },
+    { key: 'max_drawdown', label: t('common.metric.max_drawdown'), format: (v) => `${(v * 100).toFixed(1)}%`, higher: false },
+    { key: 'win_rate', label: t('common.metric.win_rate'), format: (v) => `${(v * 100).toFixed(0)}%`, higher: true },
+    { key: 'calmar_ratio', label: t('common.metric.calmar_ratio'), format: (v) => v.toFixed(2), higher: true },
+    { key: 'sortino_ratio', label: t('common.metric.sortino_ratio'), format: (v) => v.toFixed(2), higher: true },
   ];
 
-  const getBestIndex = (key: string, higher: boolean) => {
-    const values = metrics.map(m => m[key as keyof CompareMetrics] as number);
+  const getBestIndex = (key: MetricKey, higher: boolean) => {
+    const values = metrics.map((m) => m[key]);
     const best = higher ? Math.max(...values) : Math.min(...values);
     return values.indexOf(best);
   };
 
-  const exportRows = metrics.map(m => ({
+  // NOTE: this table is transposed (metrics as rows, strategies as columns),
+  // which DataTable's column model cannot express, so it renders its own
+  // <table> and keeps a local export toolbar instead of DataTable enableExport.
+  const exportRows = metrics.map((m) => ({
     strategy_name: m.strategy_name,
-    ...Object.fromEntries(rows.map(r => [r.key, m[r.key as keyof CompareMetrics]])),
+    ...Object.fromEntries(rows.map((r) => [r.key, m[r.key]])),
   }));
 
   return (
@@ -80,7 +86,7 @@ export const CompareMetricsTable: React.FC<CompareMetricsTableProps> = ({ metric
                     "p-3 text-right font-medium",
                     idx === bestIdx && "text-brand-600 font-semibold"
                   )}>
-                    {row.format(m[row.key as keyof CompareMetrics] as number)}
+                    {row.format(m[row.key])}
                     {idx === bestIdx && <span className="ml-1">🏆</span>}
                   </td>
                 ))}

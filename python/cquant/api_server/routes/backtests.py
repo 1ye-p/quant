@@ -1158,9 +1158,9 @@ async def get_regime_timeline(run_id: str, catalog: CatalogDep) -> dict:
 
             hist = pl.read_parquet(regime_path).sort("trade_date")
             dates = [str(d) for d in hist["trade_date"].to_list()]
-            scales = [float(s) for s in hist["desired_scale"].to_list()]
+            scales = [None if s is None else float(s) for s in hist["desired_scale"].to_list()]
             if "actual_scale" in hist.columns:
-                actual_scales = [float(s) for s in hist["actual_scale"].to_list()]
+                actual_scales = [None if s is None else float(s) for s in hist["actual_scale"].to_list()]
         except Exception as e:
             logger.warning("Failed to read regime history for %s: %s", run_id, e)
 
@@ -1252,7 +1252,7 @@ async def get_regime_timeline(run_id: str, catalog: CatalogDep) -> dict:
     }
 
 
-
+@router.get("/{run_id}/return-distribution")
 async def get_return_distribution(
     run_id: str,
     catalog: CatalogDep,

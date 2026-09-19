@@ -11,12 +11,14 @@
 越过 PIT 边界的可能（spike §4 已验证）。
 
 缓存策略（避免逐 as_of 全量重建的 O(N²) 查询/内存）：
-  - 每个 indicator_key 只查询一次「全历史」（含 available_date 列），
-    之后任意 as_of 的 PIT 视图都通过本地 ``available_date <= as_of``
-    过滤得到，与 loader SQL 的 PIT 语义等价；
-  - 宽表伪 panel 同样按 indicators 快照缓存全历史（每列附带
-    ``__avail__<alias>`` 到位日期），as_of 视图 = 行过滤 + 迟到列置 null；
-  - 两个缓存均为 LRU（容量默认 32，环境变量 ``CQUANT_MARKET_PANEL_CACHE``
+  - 每个 indicator_key 只查询一次「全历史修订行」（不去重，含
+    available_date / updated_at 列），之后任意 as_of 的 PIT 视图在本地
+    复刻 loader SQL 语义：先 ``available_date <= as_of`` 过滤，再按
+    trade_date 取 ``updated_at`` 最大行（arg_max 等价）——顺序与 SQL 一致，
+    同一 trade_date 多次修订时可见旧修订（全局 arg_max 后过滤会丢行）；
+  - 宽表伪 panel 同样基于缓存的修订行在视图时重建（过滤 → arg_max →
+    按 trade_date 外连接），不再预去重；
+  - 缓存为 LRU（容量默认 32，环境变量 ``CQUANT_MARKET_PANEL_CACHE``
     可调；设为 0 完全禁用缓存，退回逐次查询的原始行为）。
 """
 
@@ -29,7 +31,11 @@ from datetime import date
 
 import polars as pl
 
-from cquant.datahub.external_loader import MARKET_SENTINEL, load_external_series
+from cquant.datahub.external_loader import (
+    MARKET_SENTINEL,
+    load_external_series,
+    load_external_series_revisions,
+)
 from cquant.factorlab.dsl_evaluator import compile_expression
 
 logger = logging.getLogger(__name__)
@@ -68,31 +74,47 @@ class MarketSeriesContext:
         self._catalog = catalog
         self._maxsize = _cache_maxsize()
         self._cache_enabled = self._maxsize > 0
-        # indicator_key -> 全历史 raw [trade_date, value, available_date]
+        # indicator_key -> 全历史修订行 raw [trade_date, value, available_date,
+        # updated_at]（不去重，保留被修订覆盖的旧行）
         self._raw_cache: OrderedDict[str, pl.DataFrame] = OrderedDict()
-        # indicators 快照 -> 全历史宽表（含 __avail__<alias> 辅助列）
-        self._panel_cache: OrderedDict[
-            tuple[tuple[str, str], ...], pl.DataFrame
-        ] = OrderedDict()
         # 底层 catalog 查询计数（测试/诊断用）
         self.load_count = 0
 
     # ── 缓存原语 ─────────────────────────────────────────────────────────
 
     def _raw_full(self, indicator_key: str) -> pl.DataFrame:
-        """取指标全历史（含 available_date），带 LRU 逐出。"""
+        """取指标全历史修订行（含 available_date/updated_at），带 LRU 逐出。"""
         cached = self._raw_cache.get(indicator_key)
         if cached is not None:
             self._raw_cache.move_to_end(indicator_key)
             return cached
-        raw = load_external_series(
-            self._catalog, indicator_key, _LOAD_ALL, include_available_date=True
-        )
+        raw = load_external_series_revisions(self._catalog, indicator_key, _LOAD_ALL)
         self.load_count += 1
         self._raw_cache[indicator_key] = raw
         while len(self._raw_cache) > self._maxsize:
             self._raw_cache.popitem(last=False)
         return raw
+
+    @staticmethod
+    def _pit_view(raw: pl.DataFrame, as_of: date) -> pl.DataFrame:
+        """本地复刻 loader SQL 的 PIT 语义（顺序一致，修订等价）。
+
+        SQL 是 ``WHERE available_date <= ?`` 之后才
+        ``arg_max(value, updated_at) ... GROUP BY trade_date``；因此本地视图
+        也必须先过滤可见行，再按 trade_date 取 updated_at 最大者 —— 若先在
+        全历史上取赢家再过滤，赢家修订尚未到位的 trade_date 会整行丢失。
+        """
+        if raw.is_empty():
+            return raw
+        visible = raw.filter(pl.col("available_date") <= as_of)
+        if visible.is_empty():
+            return visible
+        return (
+            visible.sort("updated_at")
+            .unique(subset=["trade_date"], keep="last")
+            .sort("trade_date")
+            .drop("updated_at")
+        )
 
     # ── 单指标序列 ────────────────────────────────────────────────────────
 
@@ -116,15 +138,12 @@ class MarketSeriesContext:
             raw = load_external_series(self._catalog, indicator_key, as_of)
             self.load_count += 1
         else:
-            full = self._raw_full(indicator_key)
-            raw = (
-                full.filter(pl.col("available_date") <= as_of)
-                .drop("available_date")
-                if not full.is_empty()
-                else full
-            )
+            # [trade_date, value, available_date] — arg_max 等价视图
+            raw = self._pit_view(self._raw_full(indicator_key), as_of)
         if raw.is_empty():
             return _empty_series(col)
+        if "available_date" in raw.columns:
+            raw = raw.drop("available_date")
         return raw.rename({"value": col}).with_columns(
             pl.lit(MARKET_SENTINEL).alias("asset_id")
         ).select(["trade_date", col, "asset_id"])
@@ -148,74 +167,39 @@ class MarketSeriesContext:
         return self._panel_cached(as_of, indicators)
 
     def _panel_cached(self, as_of: date, indicators: dict[str, str]) -> pl.DataFrame:
-        cache_key = tuple(sorted(indicators.items()))
-        full = self._panel_cache.get(cache_key)
-        if full is not None:
-            self._panel_cache.move_to_end(cache_key)
-        else:
-            full = self._build_full_panel(indicators)
-            if full is None:
-                # 全部指标无任何数据：等价于空 panel（不缓存，成本低）
-                return pl.DataFrame(
-                    schema={
-                        "trade_date": pl.Date,
-                        "asset_id": pl.Utf8,
-                        **{a: pl.Float64 for a in indicators},
-                    }
-                )
-            self._panel_cache[cache_key] = full
-            while len(self._panel_cache) > self._maxsize:
-                self._panel_cache.popitem(last=False)
+        """缓存路径：基于 per-key 修订行缓存在视图时重建宽表。
 
-        avail_cols = [f"__avail__{a}" for a in indicators]
-        # 行存在条件：任一指标在该行已到位（等价于逐片段 PIT 过滤后外连接）
-        keep = pl.any_horizontal([pl.col(c) <= as_of for c in avail_cols])
-        # 迟到指标单元格置 null（该片段在原逻辑中不含此行）
-        cell_exprs = [
-            pl.when(pl.col(f"__avail__{a}") <= as_of)
-            .then(pl.col(a))
-            .otherwise(pl.lit(None, dtype=pl.Float64))
-            .alias(a)
-            for a in indicators
-        ]
-        return (
-            full.filter(keep)
-            .with_columns(cell_exprs)
-            .drop(avail_cols)
-            .with_columns(pl.lit(MARKET_SENTINEL).alias("asset_id"))
-            .select(["trade_date"] + list(indicators.keys()) + ["asset_id"])
-        )
-
-    def _build_full_panel(self, indicators: dict[str, str]) -> pl.DataFrame | None:
-        """构建全历史宽表：每列附带到位日期 ``__avail__<alias>``。"""
+        每个指标先做与 loader SQL 等价的本地 PIT 视图（过滤 → arg_max），
+        再按 trade_date 外连接 —— 与无缓存路径逐片段查询的行为一致，
+        仅数据源换成缓存的全历史修订行。
+        """
         panel: pl.DataFrame | None = None
         for alias, key in indicators.items():
-            full = self._raw_full(key)
-            if full.is_empty():
+            view = self._pit_view(self._raw_full(key), as_of)
+            if view.is_empty():
                 continue
-            frag = full.rename(
-                {"value": alias, "available_date": f"__avail__{alias}"}
-            ).select(["trade_date", alias, f"__avail__{alias}"])
+            frag = (
+                view.drop("available_date")
+                .rename({"value": alias})
+                .select(["trade_date", alias])
+            )
             if panel is None:
                 panel = frag
             else:
-                # coalesce: 右侧独有行的 trade_date 合并进主键列
                 panel = panel.join(frag, on="trade_date", how="full", coalesce=True)
         if panel is None:
-            return None
-        # 缺席指标：null 值列 + 永不到位哨兵（单元格恒 null，不贡献行存在性）
-        missing = [a for a in indicators if a not in panel.columns]
-        if missing:
-            panel = panel.with_columns(
-                [
-                    pl.lit(None, dtype=pl.Float64).alias(a),
-                    *(
-                        pl.lit(_LOAD_ALL).alias(f"__avail__{a}")
-                        for a in missing
-                    ),
-                ]
+            return pl.DataFrame(
+                schema={
+                    "trade_date": pl.Date,
+                    "asset_id": pl.Utf8,
+                    **{a: pl.Float64 for a in indicators},
+                }
             )
-        return panel.sort("trade_date")
+        return (
+            panel.sort("trade_date")
+            .with_columns(pl.lit(MARKET_SENTINEL).alias("asset_id"))
+            .select(["trade_date"] + list(indicators.keys()) + ["asset_id"])
+        )
 
     def _panel_uncached(self, as_of: date, indicators: dict[str, str]) -> pl.DataFrame:
         """无缓存路径：逐指标按 as_of 查询（原始行为）。"""

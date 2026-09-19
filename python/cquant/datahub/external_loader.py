@@ -46,6 +46,39 @@ ORDER BY trade_date
 """
 
 
+# All revision rows (no arg_max dedup) — lets full-history caches keep
+# superseded revisions so a per-as_of view can reproduce the exact
+# arg_max semantics locally (filter available_date, then pick the row
+# with the latest updated_at per trade_date).
+_LOAD_SQL_REVISIONS = """
+SELECT trade_date, value, available_date, updated_at
+FROM silver_external_indicators
+WHERE indicator_key = ?
+  AND asset_id = ?
+  AND available_date <= ?
+ORDER BY trade_date, updated_at
+"""
+
+
+def load_external_series_revisions(
+    catalog: Catalog,
+    indicator_key: str,
+    as_of_date: date = date.max,
+    asset_id: str = MARKET_SENTINEL,
+) -> pl.DataFrame:
+    """Load ALL revision rows for an indicator (no per-trade_date dedup).
+
+    Returns a DataFrame with columns ``trade_date``, ``value``,
+    ``available_date``, ``updated_at`` ordered by ``(trade_date, updated_at)``.
+    Intended for full-history caching: to reproduce ``load_external_series``
+    semantics at an arbitrary ``as_of``, callers must (1) filter
+    ``available_date <= as_of`` and then (2) keep only the row with the
+    latest ``updated_at`` per ``trade_date`` — filtering after a global
+    arg_max would drop trade_dates whose latest revision is not yet visible.
+    """
+    return catalog.query(_LOAD_SQL_REVISIONS, [indicator_key, asset_id, as_of_date])
+
+
 def load_external_series(
     catalog: Catalog,
     indicator_key: str,

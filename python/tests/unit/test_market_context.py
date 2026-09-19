@@ -24,31 +24,52 @@ VALS = [100.0 + 2.0 * i + (3.0 if i % 7 == 0 else 0.0) + (i % 3) * 0.5 for i in 
 class FakeCatalog:
     """Stand-in for datahub Catalog serving silver_external_indicators rows.
 
-    table: indicator_key -> [(trade_date, available_date, value)]
-    ``query`` mimics load_external_series' SQL filter (available_date <= as_of).
+    table: indicator_key -> [(trade_date, available_date, value[, updated_at])]
+    (``updated_at`` defaults to ``available_date`` for 3-tuples).
+    ``query`` mimics the loader SQLs: the PIT filter (available_date <= as_of)
+    plus, for the arg_max variants, GROUP BY trade_date with the latest-
+    updated_at row winning; the raw-revisions variant returns every row.
     """
 
-    def __init__(self, table: dict[str, list[tuple[date, date, float]]]) -> None:
+    def __init__(self, table: dict[str, list[tuple]]) -> None:
         self.table = table
         self.queries: list[tuple[str, date]] = []
 
     def query(self, sql: str, params: list) -> pl.DataFrame:
         indicator_key, _asset_id, as_of = params
         self.queries.append((indicator_key, as_of))
-        matched = [
-            (d, avail, v) for (d, avail, v) in self.table.get(indicator_key, [])
-            if avail <= as_of
-        ]
-        # include_available_date variant also surfaces the availability date
-        if "AS available_date" in sql:
+        rows = []
+        for r in self.table.get(indicator_key, []):
+            d, avail, v = r[0], r[1], r[2]
+            upd = r[3] if len(r) == 4 else avail
+            if avail <= as_of:
+                rows.append((d, avail, v, upd))
+        if "arg_max" in sql:
+            # arg_max(value, updated_at) ... GROUP BY trade_date
+            best: dict[date, tuple] = {}
+            for r in rows:
+                if r[0] not in best or r[3] > best[r[0]][3]:
+                    best[r[0]] = r
+            winners = [best[d] for d in sorted(best)]
+            cols = {
+                "trade_date": [r[0] for r in winners],
+                "value": [r[2] for r in winners],
+            }
+            if "AS available_date" in sql:
+                cols["available_date"] = [r[1] for r in winners]
+            return pl.DataFrame(cols)
+        if "updated_at" in sql:
+            # raw revisions load (no dedup), ORDER BY trade_date, updated_at
+            ordered = sorted(rows, key=lambda r: (r[0], r[3]))
             return pl.DataFrame({
-                "trade_date": [r[0] for r in matched],
-                "value": [r[2] for r in matched],
-                "available_date": [r[1] for r in matched],
+                "trade_date": [r[0] for r in ordered],
+                "value": [r[2] for r in ordered],
+                "available_date": [r[1] for r in ordered],
+                "updated_at": [r[3] for r in ordered],
             })
         return pl.DataFrame({
-            "trade_date": [r[0] for r in matched],
-            "value": [r[2] for r in matched],
+            "trade_date": [r[0] for r in rows],
+            "value": [r[2] for r in rows],
         })
 
 
@@ -205,7 +226,7 @@ class TestPanelCache:
         for i in (5, 10, 15):
             ctx.series("active_cap", _d(i))
         assert ctx.load_count == 3  # every call hits the catalog
-        assert ctx._raw_cache == {} and ctx._panel_cache == {}
+        assert ctx._raw_cache == {}
 
     def test_cached_panel_matches_uncached_pit_view(self, monkeypatch) -> None:
         """Cached full-history view must equal a fresh per-as_of query,
@@ -230,3 +251,36 @@ class TestPanelCache:
             a = cached_ctx.evaluate("ma(cap, 5)", _d(i), ind)
             b = uncached_ctx.evaluate("ma(cap, 5)", _d(i), ind)
             assert abs(a - b) < 1e-12
+
+    def test_cached_panel_revision_equivalence(self, monkeypatch) -> None:
+        """Same trade_date revised later: the cached view must fall back to
+        the latest *visible* revision (filter available_date, then arg_max),
+        matching the loader SQL exactly on both sides of the revision date.
+        """
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "32")
+        d1, d2 = _d(5), _d(12)  # v1 visible from d1; revision v2 from d2
+        table = {"k": [(_d(i), _d(i), 10.0 + i) for i in range(N)]}
+        table["k"].append((_d(5), d2, 99.0, _d(13)))  # later updated_at wins at d2+
+
+        cached_ctx = MarketSeriesContext(FakeCatalog(table))
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "0")
+        uncached_ctx = MarketSeriesContext(FakeCatalog(table))
+
+        for as_of in (d1, _d(8), _d(11)):  # as_of ∈ [d1, d2) → v1 (15.0)
+            got = cached_ctx.series("k", as_of).filter(pl.col("trade_date") == d1)
+            assert got["k"].to_list() == [15.0], f"pre-revision as_of={as_of}"
+        for as_of in (d2, _d(20)):  # as_of ≥ d2 → v2 (99.0)
+            got = cached_ctx.series("k", as_of).filter(pl.col("trade_date") == d1)
+            assert got["k"].to_list() == [99.0], f"post-revision as_of={as_of}"
+
+        # exact equivalence with the (uncached) loader arg_max SQL path
+        for as_of in (d1, _d(8), d2, _d(20)):
+            assert cached_ctx.series("k", as_of).equals(
+                uncached_ctx.series("k", as_of)
+            ), f"cached view diverges from loader SQL at as_of={as_of}"
+            ind = {"k": "k"}
+            assert cached_ctx.panel(as_of, ind).equals(
+                uncached_ctx.panel(as_of, ind)
+            )
+        # one underlying query regardless of as_of count
+        assert cached_ctx.load_count == 1

@@ -232,6 +232,9 @@ class BacktestRunSpec:
     factor_weights: dict[str, float] | None = None
     # BreakoutPullback params
     breakout_config: dict = field(default_factory=dict)
+    # L2 DSL strategy (strategy_type="DSL"): raw StrategyDSL dict
+    # (schema: cquant.strategy_dsl.schema.StrategyDSL)
+    dsl_spec: dict = field(default_factory=dict)
     # Local RNG seed — propagated to BacktestSpec.random_seed for reproducible,
     # concurrency-safe runs (no global seed pollution).
     random_seed: int | None = None
@@ -1085,6 +1088,19 @@ class BacktestRunner:
                 model_version=spec.model_version,
                 top_n=spec.top_n,
                 label_name=spec.label_name,
+            )
+        if spec.strategy_type == "DSL":
+            from cquant.strategy_dsl.executor import DSLStrategy
+            from cquant.strategy_dsl.schema import StrategyDSL
+
+            if not spec.dsl_spec:
+                raise ValueError(
+                    "dsl_spec is required for DSL strategy (StrategyDSL dict/YAML config)."
+                )
+            return DSLStrategy(
+                spec=StrategyDSL.from_dict(spec.dsl_spec),
+                catalog=self._catalog,
+                top_n=spec.top_n,
             )
         if spec.strategy_type == "MultiFactor":
             from cquant.backtest_vector.strategies.multi_factor import MultiFactorStrategy

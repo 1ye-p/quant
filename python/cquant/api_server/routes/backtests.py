@@ -2834,11 +2834,15 @@ from dataclasses import asdict, dataclass
 
 @dataclass
 class ValidationChecklist:
-    """一键验证套件聚合清单（每项三态：True/False/None=不适用或该步失败）。"""
+    """一键验证套件聚合清单（三态语义：True/False=有值判定，None=步失败或不适用）。"""
 
-    psr_pass: bool | None                   # PSR > PSR_PASS_THRESHOLD
+    psr_pass: bool | None                   # PSR > PSR_PASS_THRESHOLD（None=PSR 步失败）
     fold_stable: bool | None                # WF fold sharpe CV < FOLD_STABILITY_CV_MAX
+                                            # （None=WF 步失败，或 fold_source=returns_slice
+                                            #  切片估计不构成样本外折，不作真/假判定）
     sensitivity_flat: bool | None           # 参数扰动下 sharpe CV < SENSITIVITY_CV_MAX
+                                            # （None=敏感性步失败/无值/跳过）
+    fold_source: str | None                 # "walk_forward" | "returns_slice" | None（步失败）
     regime_cycles_sufficient: bool | None   # regime 周期数 >= MIN_REGIME_CYCLES（None=非 regime）
     cost_assumptions: dict                  # 滑点/佣金/冲击假设（run spec cost_model + 默认值）
 
@@ -3054,6 +3058,7 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
 
     # ── Step 2: walk-forward（复用 WalkForwardRefit；0 成功折 → 兜底切returns）─
     fold_sharpes: list[float] = []
+    fold_source: str | None = None
     try:
         from cquant.bt_analyzer.walk_forward_refit import WalkForwardRefit
 
@@ -3069,10 +3074,12 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 f.test_metrics.get("sharpe_ratio", 0.0)
                 for f in wf.folds if f.success
             ]
+            fold_source = "walk_forward"
         else:
             # 重建 spec 无 prices → 引擎无法重跑折；退化为对已持久化收益切片
             fold_sharpes = _slice_fold_sharpes(result, WF_SUITE_N_FOLDS)
-            payload["fold_source"] = "returns_slice"
+            fold_source = "returns_slice"
+        payload["fold_source"] = fold_source
         if dsl_spec is not None:
             # D7 标注：套件内 WF 不对 DSL 因子权重做逐折重估
             payload["weights_refit"] = False
@@ -3087,9 +3094,17 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
     fold_stable: bool | None = None
     if fold_sharpes:
         fold_cv = _cv(fold_sharpes)
-        fold_stable = fold_cv < FOLD_STABILITY_CV_MAX
         steps[-1]["fold_sharpe_cv"] = fold_cv
-        steps[-1]["fold_stable"] = fold_stable
+        if fold_source == "returns_slice":
+            # 切片估计不构成样本外折：不作稳定/不稳定判定，附注说明数据来源
+            steps[-1]["fold_stable"] = None
+            steps[-1]["fold_stable_note"] = (
+                "分段稳定性为全程切片估计，非样本外折（walk-forward 无成功折，"
+                "已退化为对已持久化收益的等分切片）"
+            )
+        else:
+            fold_stable = fold_cv < FOLD_STABILITY_CV_MAX
+            steps[-1]["fold_stable"] = fold_stable
 
     # ── Step 3: 参数敏感性（DSL 权重/regime scale ±10%；非 DSL 退化 top_n） ──
     sensitivity_flat: bool | None = None
@@ -3234,9 +3249,11 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
         )
 
     checklist = ValidationChecklist(
-        psr_pass=(psr is not None and psr > PSR_PASS_THRESHOLD),
+        # 三态：None=PSR 步失败（无法计算），非 False
+        psr_pass=(None if psr is None else psr > PSR_PASS_THRESHOLD),
         fold_stable=fold_stable,
         sensitivity_flat=sensitivity_flat,
+        fold_source=fold_source,
         regime_cycles_sufficient=regime_sufficient,
         cost_assumptions=cost_assumptions,
     )

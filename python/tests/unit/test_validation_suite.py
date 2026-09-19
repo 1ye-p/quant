@@ -1,10 +1,11 @@
 """Phase 4 T1：一键验证套件后端（validation-suite）。
 
 覆盖：
-1. 有产物 run → 套件 job completed → checklist 各字段非 None
-   （非 regime 策略 regime_cycles_sufficient=None）
+1. 有产物 run → 套件 job completed；checklist 三态语义
+   （步失败/不适用 → None；短数据 WF 0 折 → fold_source=returns_slice 且 fold_stable=None）
 2. DSL 策略 → 敏感性空间含各因子权重 ±10% 扫描点 + WF 结果 weights_refit=false（D7）
-3. 单步失败（monkeypatch WalkForwardRefit 抛错）→ 套件不炸，该项 failed+原因可见
+3. 单步失败（monkeypatch）→ 套件不炸，该项 failed+原因可见；
+   PSR 步失败 → psr_pass=None（非 False）
 4. GET /{run_id}/validation-suite 返回落库结果
 """
 
@@ -188,9 +189,11 @@ class TestValidationSuiteEndToEnd:
         ck = suite["checklist"]
         # 非 regime 策略：regime_cycles_sufficient 为 None，其余字段有值
         assert isinstance(ck["psr_pass"], bool)
-        assert isinstance(ck["fold_stable"], bool)
         assert isinstance(ck["sensitivity_flat"], bool)
         assert ck["regime_cycles_sufficient"] is None
+        # 20 日数据太短，WF 0 成功折 → returns_slice 兜底：透传来源且不作真假判定
+        assert ck["fold_source"] == "returns_slice"
+        assert ck["fold_stable"] is None
         assert suite["psr"] is not None and suite["dsr"] is not None
         # 成本假设：默认值醒目展示
         assert ck["cost_assumptions"]["defaults_used"] is True
@@ -198,6 +201,42 @@ class TestValidationSuiteEndToEnd:
         assert "commission_rate" in ck["cost_assumptions"]["defaults"]
         # 阈值常量随结果透出
         assert ck["thresholds"]["psr_pass"] == 0.95
+
+    def test_walk_forward_folds_yield_bool_fold_stable(self, filled_run, monkeypatch) -> None:
+        """WF 成功折 ≥2（stub）→ fold_source=walk_forward + fold_stable 真假判定。
+
+        注：套件从落库产物重建 spec（无 strategy），真 WF 折在持久化路径必然失败，
+        故用 stub 驱动 walk_forward 分支的路由逻辑。
+        """
+        from cquant.bt_analyzer.walk_forward_refit import WalkForwardRefit
+
+        class _Fold:
+            success = True
+            test_metrics = {"sharpe_ratio": 1.2}
+
+        class _StubWF:
+            total_folds = 4
+            successful_folds = 4
+            folds = [_Fold() for _ in range(4)]
+            def summary(self):
+                return {}
+
+        monkeypatch.setattr(
+            WalkForwardRefit, "from_backtest_result", lambda *a, **k: _StubWF()
+        )
+
+        cat, run_id = filled_run
+        resp = _run_suite_endpoint(cat, run_id)
+        job = asyncio.run(get_job_status(resp["job_id"], cat))
+        assert job["status"] == "completed", f"job error: {job.get('error')}"
+
+        suite = _get_suite(cat, run_id)
+        wf = _steps_by_name(suite)["walk_forward"]
+        assert wf["fold_source"] == "walk_forward"
+        assert isinstance(wf["fold_stable"], bool)
+        ck = suite["checklist"]
+        assert ck["fold_source"] == "walk_forward"
+        assert isinstance(ck["fold_stable"], bool)
 
     def test_missing_run_404(self, catalog) -> None:
         cat, _ = catalog
@@ -260,6 +299,62 @@ class TestStepFailureIsolation:
         assert steps["psr_dsr"]["status"] == "completed"
         assert steps["sensitivity"]["status"] == "completed"
         # WF 失败 → fold_stable 退化为 None（三态清单可区分）
+        assert suite["checklist"]["fold_stable"] is None
+        assert suite["checklist"]["fold_source"] is None
+
+    def test_psr_step_failure_yields_psr_pass_none(self, filled_run, monkeypatch) -> None:
+        """PSR 步失败（monkeypatch）→ psr_pass 为 None（无法计算），而非 False。"""
+        from cquant.bt_analyzer.run import AnalysisRunner
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("psr-exploded")
+
+        monkeypatch.setattr(AnalysisRunner, "run", _boom)
+
+        cat, run_id = filled_run
+        resp = _run_suite_endpoint(cat, run_id)
+        job = asyncio.run(get_job_status(resp["job_id"], cat))
+        assert job["status"] == "completed", f"job error: {job.get('error')}"
+
+        suite = _get_suite(cat, run_id)
+        steps = _steps_by_name(suite)
+        assert steps["psr_dsr"]["status"] == "failed"
+        assert "psr-exploded" in steps["psr_dsr"]["error"]
+        # 三态语义：无法计算 → None，不得误报为 False（不通过）
+        assert suite["checklist"]["psr_pass"] is None
+        assert suite["psr"] is None
+        # 其余步骤不受影响
+        assert steps["sensitivity"]["status"] == "completed"
+
+    def test_returns_slice_fallback_marks_fold_source(self, filled_run, monkeypatch) -> None:
+        """WF 0 成功折 → returns_slice 兜底：fold_source 透传、fold_stable=None+附注。"""
+        from cquant.bt_analyzer.walk_forward_refit import WalkForwardRefit
+
+        class _EmptyWF:
+            total_folds = 4
+            successful_folds = 0
+            folds = []
+            def summary(self):
+                return {}
+
+        monkeypatch.setattr(
+            WalkForwardRefit, "from_backtest_result",
+            lambda *a, **k: _EmptyWF(),
+        )
+
+        cat, run_id = filled_run
+        resp = _run_suite_endpoint(cat, run_id)
+        job = asyncio.run(get_job_status(resp["job_id"], cat))
+        assert job["status"] == "completed", f"job error: {job.get('error')}"
+
+        suite = _get_suite(cat, run_id)
+        wf = _steps_by_name(suite)["walk_forward"]
+        assert wf["fold_source"] == "returns_slice"
+        assert len(wf["fold_sharpes"]) > 0
+        assert wf["fold_stable"] is None
+        assert "非样本外折" in wf["fold_stable_note"]
+        # checklist 透传数据来源 + 不作真假判定（诚实语义）
+        assert suite["checklist"]["fold_source"] == "returns_slice"
         assert suite["checklist"]["fold_stable"] is None
 
 

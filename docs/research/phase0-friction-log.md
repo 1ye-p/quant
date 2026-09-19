@@ -177,3 +177,18 @@
 **测试**：`test_wal_governance.py` 8 项（close清WAL/checkpoint收缩+数据存活/自愈隔离/误报阴性/线程生命周期×3）+ T4 回归脚本（close→WAL 清除、损坏→隔离+可用、27 测试无回归）。
 
 **级别变更**：🔴 → ✅（研究员不再手删文件；损坏自动隔离有告警）。
+
+---
+
+## 处置结论：摩擦 2-1/2-2/2-3/2-4/2-5/3-2/3-3/3-8（因子闭环层 Phase 2）已闭环 ✅
+
+**修复**（2026-09-19，commits `aa2e274` + `463d2b0` + `a061b3a` + `aec0329` + `b0ad767`）：
+1. **3-3 MultiFactor 权重**：BacktestCreateBody/RunSpec 加 factor_weights，策略配置优先（body 显式非 None 覆盖），引擎真权重替代硬编码 `{sort_factor:1.0}`；key⊆factors 校验 + 全零拒绝；旧策略 bit-for-bit 不变（5 测试含路由级）。
+2. **2-2 名单一致性（C3）**：/available = 已物化 ∪ 可注册（cQuant 命名 + status 标签），Alpha360 降 reference；/definitions 同源；ret_20d 回列表；materialized DISTINCT 加 TTL 缓存。
+3. **2-3/3-2 自定义因子（D3）**：custom_factor_loader → ExpressionFactor → materialize 装配注册；/available 合并 is_custom；CRUD 清缓存；builtin 同名 409 防御。
+4. **2-5 IC 汇总**：gold_factor_ic_summary DDL + IC 计算 upsert + leaderboard/status 真实读表（空表显式提示）；alert_checker 列名同步修复。
+5. **2-4 preview**：锚 max(trade_date)-30d；Qlib 语法检测提示。
+6. **3-8 benchmark**：下拉（无基准首项 + 5 指数，实测数据可用），UI 预选 csi300，服务端无静默默认。
+7. **选择器**：搜索/已选置顶/materialized 徽标。
+
+**级别变更**：2-1 🟠→✅、2-2 🟠→✅、2-3 🔴→✅、2-4 🟠→✅、2-5 🔴→✅、3-2 🔴→✅、3-3 🔴→✅、3-8 🟠→✅。课题 A 三段断裂（选因子/配权重/看汇总）全部修复。

@@ -642,6 +642,7 @@ async def get_anomalies(version_id: str, catalog: CatalogDep, limit: int = 20) -
 # ── External indicators (CSV import, D1-A __MARKET__ sentinel) ───────────────
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -654,10 +655,26 @@ from cquant.datahub.pipelines.external_indicator_importer import (
 )
 
 
+_ALLOWED_SUFFIXES = {".csv"}
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
 async def _save_upload(file: UploadFile) -> Path:
-    suffix = Path(file.filename or "upload.csv").suffix or ".csv"
+    suffix = Path(file.filename or "upload.csv").suffix.lower() or ".csv"
+    if suffix not in _ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"不支持的文件类型 '{suffix}'，仅支持 CSV（.csv）",
+        )
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ext_ind_")
     content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        tmp.close()
+        os.unlink(tmp.name)
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大（{len(content) / 1024 / 1024:.1f}MB），上限 50MB",
+        )
     tmp.write(content)
     tmp.close()
     return Path(tmp.name)
@@ -671,6 +688,8 @@ async def preview_external_indicators_csv(file: UploadFile = File(...)) -> dict:
         return preview_csv(path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"CSV 解析失败：{exc}") from exc
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @router.post("/external-indicators/import")
@@ -707,3 +726,5 @@ async def import_external_indicators(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"导入失败：{exc}") from exc
+    finally:
+        path.unlink(missing_ok=True)

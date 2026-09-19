@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 MARKET_SENTINEL = "__MARKET__"
 
 _LOAD_SQL = """
-SELECT trade_date, value
+SELECT trade_date, arg_max(value, updated_at) AS value
 FROM silver_external_indicators
 WHERE indicator_key = ?
   AND asset_id = ?
   AND available_date <= ?
+GROUP BY trade_date
 ORDER BY trade_date
 """
 
@@ -48,5 +49,9 @@ def load_external_series(
 
     Returns:
         DataFrame with columns ``trade_date``, ``value`` ordered by trade_date.
+        Cross-source duplicates (same indicator_key/asset_id/trade_date from
+        different ``source`` values) collapse to the row with the latest
+        ``updated_at`` — the primary key includes ``source``, so a plain
+        SELECT would return parallel rows per source.
     """
     return catalog.query(_LOAD_SQL, [indicator_key, asset_id, as_of_date])

@@ -216,18 +216,29 @@ class ExternalIndicatorImporter:
         self, row: dict, row_idx: int, config: ImportConfig, report: ImportReport
     ) -> tuple | None:
         line_no = row_idx + 2  # +1 header, +1 1-based
-        # trade_date
+        # trade_date — empty cells (None) and unparseable strings are skipped
+        # per-row, never raised to the caller (a single bad cell must not 500
+        # the whole import).
         raw_date = row.get("trade_date")
+        if raw_date is None or str(raw_date).strip() == "":
+            report.skipped += 1
+            report.skipped_reasons.append(f"第 {line_no} 行：trade_date 为空，已跳过")
+            return None
         try:
             trade_date = self._to_date(raw_date)
         except Exception:
             report.skipped += 1
             report.skipped_reasons.append(f"第 {line_no} 行：trade_date 无法解析：{raw_date!r}")
             return None
-        # value
+        # value — empty cells are skipped too (a NULL value with a valid date
+        # is almost always a data error in user CSVs, not a deliberate NA)
         raw_value = row.get("value")
+        if raw_value is None or str(raw_value).strip() == "":
+            report.skipped += 1
+            report.skipped_reasons.append(f"第 {line_no} 行：value 为空，已跳过")
+            return None
         try:
-            value = None if raw_value is None else float(raw_value)
+            value = float(raw_value)
         except (TypeError, ValueError):
             report.skipped += 1
             report.skipped_reasons.append(f"第 {line_no} 行：value 无法转为数值：{raw_value!r}")
@@ -241,6 +252,13 @@ class ExternalIndicatorImporter:
             if ":" not in asset_id:
                 report.warnings.append(
                     f"第 {line_no} 行：无法识别代码格式 '{raw_asset}'，按原样写入"
+                )
+            elif asset_id.startswith("BSE:8"):
+                # 88xxxx codes are Shenwan sector indices, not BSE stocks.
+                # Still normalize to BSE (non-blocking) but make the mismatch visible.
+                report.warnings.append(
+                    f"第 {line_no} 行：裸 6 位代码 '{raw_asset}' 首位为 8，"
+                    f"疑似行业指数，请使用带交易所前缀形式（如 SSE:881101）；本次按 BSE 归一写入"
                 )
         # calendar check (warning only)
         if self._calendar is not None and trade_date is not None:

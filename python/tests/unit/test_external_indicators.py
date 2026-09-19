@@ -280,3 +280,135 @@ class TestLoadExternalSeries:
         self._seed(catalog)
         df = load_external_series(catalog, "nope", as_of_date=date(2026, 1, 1))
         assert df.height == 0
+
+    def test_cross_source_dedup_latest_updated_at_wins(self, catalog):
+        """同 key 不同 source 同 trade_date → 1 行，取 updated_at 最新的值。"""
+        catalog.execute(
+            "INSERT INTO silver_external_indicators "
+            "(source, indicator_key, asset_id, trade_date, value, available_date, updated_at) "
+            "VALUES ('src_old', 'margin_balance', '__MARKET__', '2025-01-06', 111.0, '2025-01-07', "
+            "TIMESTAMPTZ '2025-01-07 08:00:00')"
+        )
+        catalog.execute(
+            "INSERT INTO silver_external_indicators "
+            "(source, indicator_key, asset_id, trade_date, value, available_date, updated_at) "
+            "VALUES ('src_new', 'margin_balance', '__MARKET__', '2025-01-06', 999.0, '2025-01-07', "
+            "TIMESTAMPTZ '2025-06-01 08:00:00')"
+        )
+        df = load_external_series(catalog, "margin_balance", as_of_date=date(2025, 6, 2))
+        assert df.height == 1
+        assert df["value"].to_list() == [999.0]
+
+
+# ── T5: empty cells never 500; bare 8x code warning ──────────────────────────
+
+
+class TestEmptyCellsAndSectorWarning:
+    def test_empty_date_cell_skipped_not_raised(self, importer, catalog, tmp_path):
+        p = _write_csv(tmp_path, [("", "1.5"), ("2025-01-07", "2.5")], header="date,val")
+        report = importer.import_csv(
+            p,
+            ImportConfig(
+                source="test",
+                indicator_key="empty_date",
+                column_map={"date": "trade_date", "val": "value"},
+            ),
+        )
+        assert report.skipped == 1
+        assert any("第 2 行" in r and "为空" in r for r in report.skipped_reasons)
+        n = catalog.query("SELECT COUNT(*) AS n FROM silver_external_indicators")["n"][0]
+        assert n == 1
+
+    def test_empty_value_cell_skipped(self, importer, catalog, tmp_path):
+        p = _write_csv(tmp_path, [("2025-01-06", ""), ("2025-01-07", "2.5")], header="date,val")
+        report = importer.import_csv(
+            p,
+            ImportConfig(
+                source="test",
+                indicator_key="empty_val",
+                column_map={"date": "trade_date", "val": "value"},
+            ),
+        )
+        assert report.skipped == 1
+        assert any("第 2 行" in r and "value" in r for r in report.skipped_reasons)
+
+    def test_bare_8x_code_warns_sector_index_but_normalizes_bse(
+        self, importer, catalog, tmp_path
+    ):
+        p = _write_csv(tmp_path, [("2025-01-06", "881101", "1.0")], header="date,code,val")
+        report = importer.import_csv(
+            p,
+            ImportConfig(
+                source="test",
+                indicator_key="sector_idx",
+                column_map={"date": "trade_date", "val": "value", "code": "asset_id"},
+            ),
+        )
+        assert report.skipped == 0  # 不阻断
+        assert any("行业指数" in w and "SSE:881101" in w for w in report.warnings)
+        aid = catalog.query("SELECT asset_id FROM silver_external_indicators")["asset_id"][0]
+        assert aid == "BSE:881101"  # 仍按 BSE 归一
+
+
+# ── T6: upload hardening (suffix whitelist, size cap, temp cleanup) ──────────
+
+
+class TestUploadHardening:
+    def _make_file(self, content: bytes, filename: str = "ext.csv"):
+        import io
+
+        from fastapi import UploadFile
+
+        return UploadFile(file=io.BytesIO(content), filename=filename)
+
+    def test_suffix_whitelist_rejects_non_csv(self):
+        import asyncio
+
+        from cquant.api_server.routes.datasets import _save_upload
+
+        with pytest.raises(Exception) as ei:
+            asyncio.run(_save_upload(self._make_file(b"a,b\n1,2", "evil.xlsx")))
+        assert "不支持的文件类型" in str(ei.value)
+
+    def test_size_cap_rejects_oversized(self, monkeypatch):
+        import asyncio
+
+        import cquant.api_server.routes.datasets as routes
+        from fastapi import HTTPException
+
+        monkeypatch.setattr(routes, "_MAX_UPLOAD_BYTES", 10)
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(routes._save_upload(self._make_file(b"x" * 100)))
+        assert ei.value.status_code == 413
+
+    def test_import_cleans_temp_file(self, catalog, tmp_path):
+        import asyncio
+        import glob
+
+        from cquant.api_server.routes import datasets as routes
+
+        before = set(glob.glob("/tmp/ext_ind_*"))
+        cfg = '{"source": "t", "indicator_key": "k", "column_map": {"date": "trade_date", "val": "value"}}'
+        csv_bytes = b"date,val\n2025-01-06,1.5\n"
+        report = asyncio.run(
+            routes.import_external_indicators(
+                catalog, file=self._make_file(csv_bytes), config=cfg
+            )
+        )
+        assert report["inserted"] == 1
+        after = set(glob.glob("/tmp/ext_ind_*"))
+        assert after == before  # 无新增残留
+
+    def test_preview_cleans_temp_file(self):
+        import asyncio
+        import glob
+
+        from cquant.api_server.routes import datasets as routes
+
+        before = set(glob.glob("/tmp/ext_ind_*"))
+        out = asyncio.run(
+            routes.preview_external_indicators_csv(file=self._make_file(b"date,val\n2025-01-06,1.5\n"))
+        )
+        assert out["total_rows"] == 1
+        after = set(glob.glob("/tmp/ext_ind_*"))
+        assert after == before

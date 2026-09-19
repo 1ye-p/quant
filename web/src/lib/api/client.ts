@@ -82,12 +82,20 @@ export async function request<T>(path: string, config: RequestConfig = {}): Prom
   }
 
   try {
+    // FormData bodies must NOT get a JSON Content-Type — the browser needs to
+    // set multipart/form-data with a generated boundary. Setting it manually
+    // strips the boundary and the server rejects the upload (422).
+    const isFormData =
+      typeof FormData !== 'undefined' && init.body instanceof FormData
+
+    const baseHeaders = new Headers(init.headers)
+    if (!isFormData && !baseHeaders.has('Content-Type')) {
+      baseHeaders.set('Content-Type', 'application/json')
+    }
+
     const res = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...init.headers,
-      },
+      headers: baseHeaders,
       signal: controller.signal,
     })
 

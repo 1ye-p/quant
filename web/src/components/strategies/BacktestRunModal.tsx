@@ -549,6 +549,10 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
                 if (parsed.strategy_type === 'BreakoutPullback') {
                   body.breakout_config = (parsed as Record<string, unknown>).breakout_config ?? {}
                 }
+                if (parsed.strategy_type === 'DSL') {
+                  // L2 DSL 策略：dsl_spec 透传给 BacktestRunSpec（后端已支持）
+                  body.dsl_spec = (parsed as Record<string, unknown>).dsl_spec ?? {}
+                }
                 // Forward missing factor handling config
                 const mfh = (parsed as Record<string, unknown>).missing_factor_handling
                 if (mfh && mfh !== 'fill_0') {

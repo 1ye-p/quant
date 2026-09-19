@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { StrategyTable } from '@/components/strategies/StrategyTable'
 import { StrategyForm } from '@/components/strategies/StrategyForm'
+import { StrategyDSLEditor } from '@/components/strategies/StrategyDSLEditor'
 import { BacktestRunModal } from '@/components/strategies/BacktestRunModal'
 import { OptimizationReportModal } from '@/components/strategies/OptimizationReportModal'
 
@@ -33,6 +34,8 @@ export function StrategiesPage() {
   const [backtestStrategyId, setBacktestStrategyId] = useState<string | null>(null)
   const [backtestConfigText, setBacktestConfigText] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [dslEditing, setDslEditing] = useState<string | 'new' | null>(null)
+  const [dslInitialConfig, setDslInitialConfig] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: extendedQueryKeys.strategies.list(),
@@ -118,6 +121,15 @@ export function StrategiesPage() {
   })
 
   function openEdit(item: { strategy_id: string; config_text: string }) {
+    // DSL 策略（config 含 dsl_spec）路由到 DSL 编辑器
+    try {
+      const parsed = JSON.parse(item.config_text)
+      if (parsed?.strategy_type === 'DSL' && parsed?.dsl_spec) {
+        setDslEditing(item.strategy_id)
+        setDslInitialConfig(item.config_text)
+        return
+      }
+    } catch { /* 非 JSON 配置走通用编辑器 */ }
     setEditingId(item.strategy_id)
     setConfigText(item.config_text)
   }
@@ -129,15 +141,26 @@ export function StrategiesPage() {
           <h1 className="page-title">{t('page.strategies.title')}</h1>
           <p className="page-subtitle">{t('page.strategies.subtitle')}</p>
         </div>
-        <button
-          className="btn-primary"
-          onClick={() => {
-            setEditingId('new')
-            setConfigText(DEFAULT_CONFIG)
-          }}
-        >
-          {t('page.strategies.create_btn')}
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              setDslEditing('new')
+              setDslInitialConfig('')
+            }}
+          >
+            {t('page.strategies.create_dsl_btn')}
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setEditingId('new')
+              setConfigText(DEFAULT_CONFIG)
+            }}
+          >
+            {t('page.strategies.create_btn')}
+          </button>
+        </div>
       </div>
 
       <StrategyTable
@@ -158,6 +181,20 @@ export function StrategiesPage() {
           editingId={editingId}
           initialConfig={configText}
           onClose={() => setEditingId(null)}
+        />
+      )}
+
+      {dslEditing && (
+        <StrategyDSLEditor
+          strategyId={dslEditing}
+          initialConfig={dslInitialConfig}
+          onClose={() => setDslEditing(null)}
+          onSaved={(id, configText) => {
+            setDslEditing(null)
+            // 保存后唤起回测（与内置策略同一入口）
+            setBacktestStrategyId(id)
+            setBacktestConfigText(configText)
+          }}
         />
       )}
 

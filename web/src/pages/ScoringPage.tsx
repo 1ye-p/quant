@@ -392,6 +392,8 @@ export function ScoringPage() {
                   { key: 'rank', label: t('page.scoring.column.rank'), sortable: true },
                 ]}
                 rowKey={(r) => `${r.asset_id}_${r.trade_date}`}
+                enableExport
+                exportFilename={`scoring_${result.results[0]?.trade_date ?? 'results'}`}
               />
 
               {result.total > PAGE_SIZE && (

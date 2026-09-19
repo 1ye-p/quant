@@ -1281,7 +1281,9 @@
         "search_placeholder": "Search...",
         "total_count": "{{count}} records",
         "prev_page": "Previous",
-        "next_page": "Next"
+        "next_page": "Next",
+        "export_csv": "Export CSV",
+        "export_json": "Export JSON"
       },
       "data_state": {
         "empty_text": "No data",
@@ -2409,7 +2411,8 @@
         "model-compare": "Model Compare",
         "feature-importance": "Feature Importance",
         "model-diagnostics": "Model Diagnostics",
-        "trade-analysis": "Trade Analysis"
+        "trade-analysis": "Trade Analysis",
+        "regime_timeline": "Regime Timeline"
       },
       "no_benchmark_hint": "No benchmark set",
       "validation": {
@@ -2491,6 +2494,33 @@
             "external_na": "N/A"
           }
         }
+      },
+      "regime": {
+        "not_applicable": "No regime (market-state timing) layer on this backtest — not applicable",
+        "not_applicable_hint": "Configure a regime block in the strategy DSL and re-run the backtest to see the state timeline.",
+        "chart_title": "NAV curve with regime state shading",
+        "nav": "NAV",
+        "desired_scale": "Desired scale",
+        "actual_scale": "Actual scale",
+        "state_full": "Full",
+        "state_reduced": "Reduced",
+        "state_flat": "Flat",
+        "cycle_stats_title": "Cycle statistics",
+        "cycles_count": "Cycles: {{cycles}} (sufficiency threshold ≥ {{threshold}})",
+        "insufficient_warning": "Insufficient regime cycles ({{cycles}} < {{threshold}}): interpret regime conclusions with caution.",
+        "contribution_title": "Contribution split",
+        "held_return": "Held-period return",
+        "held_days": "{{days}} held days",
+        "flat_days": "{{days}} out-of-market days",
+        "avoided": "Out-of-market avoided",
+        "missed": "Out-of-market missed",
+        "benchmark_approx_note": "No benchmark: approximated with full-period mean return",
+        "col_start": "Start date",
+        "col_end": "End date",
+        "col_state": "State",
+        "col_scale": "Desired scale",
+        "col_days": "Days",
+        "col_return": "Interval return"
       }
     },
     "knowledge": {
@@ -3421,6 +3451,25 @@
       },
       "error": {
         "load_failed": "Load failed: {{message}}"
+      },
+      "rank": {
+        "view_metrics": "Raw metrics",
+        "view_rank": "Ranking",
+        "col_rank": "Rank",
+        "col_strategy": "Strategy",
+        "col_score": "Score",
+        "weight": "weight",
+        "weights_hint": "Composite = weighted sum of 7 normalized dimension scores (hover column headers for weights)",
+        "empty": "No ranking data",
+        "dim": {
+          "sharpe_ratio": "Sharpe",
+          "max_drawdown": "Max Drawdown",
+          "sortino_ratio": "Sortino",
+          "calmar_ratio": "Calmar",
+          "turnover": "Turnover",
+          "oos_ratio": "OOS Ratio",
+          "cost_sensitivity": "Cost Sensitivity"
+        }
       }
     },
     "share": {

@@ -1281,7 +1281,9 @@
         "search_placeholder": "搜索...",
         "total_count": "共 {{count}} 条",
         "prev_page": "上一页",
-        "next_page": "下一页"
+        "next_page": "下一页",
+        "export_csv": "导出 CSV",
+        "export_json": "导出 JSON"
       },
       "data_state": {
         "empty_text": "暂无数据",
@@ -2409,7 +2411,8 @@
         "model-compare": "模型对比",
         "feature-importance": "特征重要性",
         "model-diagnostics": "模型诊断",
-        "trade-analysis": "交易分析"
+        "trade-analysis": "交易分析",
+        "regime_timeline": "Regime 时间线"
       },
       "no_benchmark_hint": "未设置基准",
       "validation": {
@@ -2491,6 +2494,33 @@
             "external_na": "N/A"
           }
         }
+      },
+      "regime": {
+        "not_applicable": "该回测未启用 regime（市场状态择时），本页不适用",
+        "not_applicable_hint": "在策略 DSL 中配置 regime 段并重新运行回测后，即可查看状态时间线。",
+        "chart_title": "净值曲线与状态区间着色",
+        "nav": "净值",
+        "desired_scale": "目标仓位",
+        "actual_scale": "实际仓位",
+        "state_full": "满仓",
+        "state_reduced": "减仓",
+        "state_flat": "空仓",
+        "cycle_stats_title": "周期统计",
+        "cycles_count": "周期数 {{cycles}}（充足阈值 ≥ {{threshold}}）",
+        "insufficient_warning": "择时周期样本不足（{{cycles}} < {{threshold}}）：regime 结论请谨慎解读。",
+        "contribution_title": "贡献分解",
+        "held_return": "持仓期累计收益",
+        "held_days": "持仓 {{days}} 天",
+        "flat_days": "空仓 {{days}} 天",
+        "avoided": "空仓期躲过收益",
+        "missed": "空仓期错失收益",
+        "benchmark_approx_note": "无基准：以全期均值收益近似",
+        "col_start": "开始日期",
+        "col_end": "结束日期",
+        "col_state": "状态",
+        "col_scale": "目标仓位",
+        "col_days": "天数",
+        "col_return": "区间收益"
       }
     },
     "knowledge": {
@@ -3421,6 +3451,25 @@
       },
       "error": {
         "load_failed": "加载失败: {{message}}"
+      },
+      "rank": {
+        "view_metrics": "原始指标",
+        "view_rank": "综合排名",
+        "col_rank": "排名",
+        "col_strategy": "策略",
+        "col_score": "总分",
+        "weight": "权重",
+        "weights_hint": "总分 = 7 维归一化得分加权和（悬停列头查看各维度权重）",
+        "empty": "暂无排名数据",
+        "dim": {
+          "sharpe_ratio": "夏普比率",
+          "max_drawdown": "最大回撤",
+          "sortino_ratio": "索提诺比率",
+          "calmar_ratio": "卡玛比率",
+          "turnover": "换手率",
+          "oos_ratio": "样本外一致性",
+          "cost_sensitivity": "成本敏感性"
+        }
       }
     },
     "share": {

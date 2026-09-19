@@ -1,5 +1,6 @@
 import { useState, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { downloadCsv, downloadJson } from '@/lib/download'
 
 export interface Column<T> {
   key: string
@@ -29,6 +30,10 @@ export interface DataTableProps<T> {
   searchPlaceholder?: string
   backendPagination?: BackendPagination
   rowClassName?: (row: T) => string
+  /** Show unified CSV/JSON export buttons in the toolbar (exports filtered rows). */
+  enableExport?: boolean
+  /** Base filename (without extension) for exports. */
+  exportFilename?: string
 }
 
 export function DataTable<T extends Record<string, unknown>>({
@@ -42,6 +47,8 @@ export function DataTable<T extends Record<string, unknown>>({
   searchPlaceholder,
   backendPagination,
   rowClassName,
+  enableExport = false,
+  exportFilename = 'export',
 }: DataTableProps<T>) {
   const { t } = useTranslation()
   const resolvedEmptyText = emptyText ?? t('component.ui.data_table.empty_text')
@@ -130,8 +137,11 @@ export function DataTable<T extends Record<string, unknown>>({
 
   return (
     <div className="space-y-3">
-      {!isBackend && (searchableKeys.length > 0 || columns.some(c => c.filterable)) && (
-        <div className="flex flex-wrap gap-2 items-center">
+      {(enableExport || (!isBackend && (searchableKeys.length > 0 || columns.some(c => c.filterable)))) && (
+        <div className="flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+          {!isBackend && (searchableKeys.length > 0 || columns.some(c => c.filterable)) && (
+            <>
           {searchableKeys.length > 0 && (
             <input
               className="input max-w-xs"
@@ -157,6 +167,25 @@ export function DataTable<T extends Record<string, unknown>>({
               ))}
             </div>
           ))}
+            </>
+          )}
+          </div>
+          {enableExport && (
+            <div className="flex gap-2">
+              <button
+                className="btn-secondary text-xs px-3 py-1"
+                onClick={() => downloadCsv(filtered as Record<string, unknown>[], `${exportFilename}.csv`)}
+              >
+                {t('component.ui.data_table.export_csv')}
+              </button>
+              <button
+                className="btn-secondary text-xs px-3 py-1"
+                onClick={() => downloadJson(filtered, `${exportFilename}.json`)}
+              >
+                {t('component.ui.data_table.export_json')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

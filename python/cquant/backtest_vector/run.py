@@ -480,6 +480,7 @@ class BacktestRunner:
         self._persist_drawdown_periods(result, run_id)
         self._persist_portfolio_snapshots(result, run_id)
         self._persist_risk_snapshots(result, run_id)
+        self._persist_regime_scale_history(result, run_id)
         self._persist_risk_policy_states(run_id, risk_policies)
         if result.pretrade_decisions:
             self._persist_pretrade_decisions(result, run_id)
@@ -901,6 +902,7 @@ class BacktestRunner:
         self._persist_drawdown_periods(result, run_id)
         self._persist_portfolio_snapshots(result, run_id)
         self._persist_risk_snapshots(result, run_id)
+        self._persist_regime_scale_history(result, run_id)
         if result.pretrade_decisions:
             self._persist_pretrade_decisions(result, run_id)
         self._persist_risk_policy_states(run_id, risk_policies or [])
@@ -1732,6 +1734,20 @@ class BacktestRunner:
             net_path = artifact_dir / f"{run_id}_net_returns.parquet"
             result.net_returns.write_parquet(net_path)
             logger.info("Persisted net-fee series → %s", net_path)
+
+    def _persist_regime_scale_history(self, result, run_id: str) -> None:
+        """Persist regime desired/actual scale history as a Parquet artifact.
+
+        Empty for non-regime runs (nothing written; the regime-timeline API
+        then reports ``applicable=false``).
+        """
+        if result.regime_scale_history.is_empty():
+            return
+        artifact_dir = Path("data/backtest_artifacts")
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        regime_path = artifact_dir / f"{run_id}_regime.parquet"
+        result.regime_scale_history.write_parquet(regime_path)
+        logger.info("Persisted regime scale history → %s", regime_path)
 
     def _persist_pretrade_decisions(self, result, run_id: str) -> None:
         """Write pre-trade risk decisions to gold_pretrade_decisions."""

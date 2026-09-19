@@ -299,6 +299,8 @@ export function DataBrowserPage() {
               columns={resultCols}
               rowKey="__idx"
               pageSize={20}
+              enableExport
+              exportFilename={`data_browser_${table}`}
             />
           </DataState>
         )}

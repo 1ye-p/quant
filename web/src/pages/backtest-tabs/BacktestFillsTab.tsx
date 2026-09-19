@@ -7,7 +7,6 @@ import { DataTable } from '@/components/ui/DataTable'
 import { TradeScatter, type TradePoint } from '@/components/charts/TradeScatter'
 import { TradeKlineChart } from '@/components/backtests/TradeKlineChart'
 import { queryKeys } from '@/lib/queryKeys'
-import { downloadCsv } from '@/lib/download'
 
 export function BacktestFillsTab() {
   const { id: selectedId } = useParams<{ id: string }>()
@@ -122,25 +121,13 @@ export function BacktestFillsTab() {
       )}
 
       {/* Table View */}
-      {view === 'table' && fillsData && fillsData.items.length > 0 && (
-        <div className="flex justify-end">
-          <button
-            className="btn-secondary text-sm"
-            onClick={() => downloadCsv(
-              (fillsData.items as unknown) as Record<string, unknown>[],
-              `fills_${selectedId?.slice(0, 8) ?? 'backtest'}.csv`,
-            )}
-          >
-            {t('component.fills.btn.export_csv')}
-          </button>
-        </div>
-      )}
-
       {view === 'table' && (
         <DataTable
           data={(fillsData?.items ?? []) as unknown as Record<string, unknown>[]}
           rowKey={(r) => `${r.trade_date}_${r.asset_id}_${r.order_idx ?? ''}`}
           pageSize={fillsPageSize}
+          enableExport
+          exportFilename={`fills_${selectedId?.slice(0, 8) ?? 'backtest'}`}
           emptyText={t('component.fills.empty')}
           rowClassName={(row: Record<string, unknown>) =>
             row.reason === 'delist_forced_liquidation' ? 'bg-orange-50' : ''

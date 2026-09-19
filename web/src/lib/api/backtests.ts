@@ -218,6 +218,73 @@ export const backtestsApi = {
   /** Latest validation suite result. 404 when never run. */
   getValidationSuite: (runId: string, config?: RequestConfig) =>
     api.get<ValidationSuite>(`/backtests/${runId}/validation-suite`, config),
+
+  /** Regime state-interval timeline + contribution split (T4). */
+  getRegimeTimeline: (id: string, config?: RequestConfig) =>
+    api.get<RegimeTimeline>(
+      `/backtests/${id}/regime-timeline`,
+      config,
+    ),
+
+  /** Multi-dimensional strategy ranking across runs (T7). */
+  rank: (
+    body: { run_ids: string[]; weights?: Record<string, number> },
+    config?: RequestConfig,
+  ) =>
+    api.post<StrategyRankResult>('/backtests/rank', body, config),
+}
+
+// ── Regime timeline / ranking types ─────────────────────────────────────────
+
+export interface RegimeTimelineInterval {
+  state: 'full' | 'reduced' | 'flat'
+  scale: number
+  start: string
+  end: string
+  days: number
+  interval_return: number | null
+}
+
+export interface RegimeTimeline {
+  run_id: string
+  applicable: boolean
+  reason?: string
+  min_cycles?: number
+  benchmark_asset_id?: string
+  intervals?: RegimeTimelineInterval[]
+  cycles?: number
+  sufficient?: boolean
+  contribution?: {
+    held_return: number
+    held_days: number
+    flat_days: number
+    out_of_market: {
+      avoided: number
+      missed: number
+      benchmark_source: 'benchmark' | 'mean_return_approx' | 'none'
+    }
+  }
+  nav_series?: { date: string; nav: number }[]
+  scale_series?: { date: string; desired: number; actual: number | null }[]
+}
+
+export interface RankedStrategy {
+  rank: number
+  strategy_id: string
+  run_id: string
+  composite_score: number
+  dimension_scores: Record<string, number>
+  raw_metrics: Record<string, number | string>
+}
+
+export interface StrategyRankResult {
+  ranked_strategies: RankedStrategy[]
+  summary: {
+    total_strategies: number
+    top_strategy: RankedStrategy | null
+    weights: Record<string, number>
+  }
+  weights: Record<string, number>
 }
 
 // ── Backward-compatible alias ───────────────────────────────────────────────

@@ -1124,7 +1124,135 @@ async def get_drawdown_timeseries(
     return {"run_id": run_id, "data": data}
 
 
-@router.get("/{run_id}/return-distribution")
+@router.get("/{run_id}/regime-timeline")
+async def get_regime_timeline(run_id: str, catalog: CatalogDep) -> dict:
+    """Regime state intervals, cycle stats, and contribution split.
+
+    Non-regime runs (no persisted ``regime_scale_history``, or a constant
+    scale of 1.0) get ``{"applicable": false}`` so the UI can show an
+    explicit not-applicable state instead of hiding the tab.
+    """
+    from cquant.backtest_vector.regime_timeline import (
+        MIN_REGIME_CYCLES,
+        build_regime_intervals,
+        compute_contribution,
+        count_cycles,
+        is_meaningful_scale_history,
+    )
+
+    run_df = catalog.query(
+        "SELECT run_id, benchmark_asset_id FROM gold_backtest_runs "
+        "WHERE run_id = ? LIMIT 1",
+        [run_id],
+    )
+    if run_df.is_empty():
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+
+    regime_path = pathlib.Path("data/backtest_artifacts") / f"{run_id}_regime.parquet"
+    dates: list[str] = []
+    scales: list[float] = []
+    actual_scales: list[float] = []
+    if regime_path.exists():
+        try:
+            import polars as pl
+
+            hist = pl.read_parquet(regime_path).sort("trade_date")
+            dates = [str(d) for d in hist["trade_date"].to_list()]
+            scales = [float(s) for s in hist["desired_scale"].to_list()]
+            if "actual_scale" in hist.columns:
+                actual_scales = [float(s) for s in hist["actual_scale"].to_list()]
+        except Exception as e:
+            logger.warning("Failed to read regime history for %s: %s", run_id, e)
+
+    if not is_meaningful_scale_history(scales):
+        return {
+            "run_id": run_id,
+            "applicable": False,
+            "reason": "no_regime_history",
+            "min_cycles": MIN_REGIME_CYCLES,
+        }
+
+    # Portfolio NAV/returns aligned to regime dates.
+    snap_df = catalog.query(
+        "SELECT trade_date, nav, portfolio_return FROM gold_portfolio_snapshots "
+        "WHERE run_id = ? ORDER BY trade_date",
+        [run_id],
+    )
+    snap_by_date: dict[str, dict] = {}
+    if not snap_df.is_empty():
+        for row in snap_df.to_dicts():
+            snap_by_date[str(row["trade_date"])] = {
+                "nav": float(row["nav"]) if row.get("nav") is not None else None,
+                "ret": float(row["portfolio_return"]) if row.get("portfolio_return") is not None else 0.0,
+            }
+
+    nav_series: list[dict] = []
+    portfolio_returns: list[float] = []
+    nav_values: list[float | None] = []
+    nav = 1.0
+    for d in dates:
+        snap = snap_by_date.get(d)
+        ret = snap["ret"] if snap else 0.0
+        if snap and snap["nav"] is not None and nav_series and snap["nav"] > 0:
+            prev = nav_series[-1]["nav"]
+            ret = (snap["nav"] / prev - 1.0) if prev > 0 else 0.0
+        portfolio_returns.append(ret)
+        nav *= 1.0 + ret
+        nav_series.append({"date": d, "nav": round(nav, 6)})
+        nav_values.append(nav_series[-1]["nav"])
+
+    # Benchmark returns aligned by date (optional).
+    benchmark_returns: list[float] | None = None
+    benchmark_asset_id = ""
+    try:
+        benchmark_asset_id = run_df["benchmark_asset_id"].item() or ""
+        if benchmark_asset_id:
+            bm_df = catalog.query(
+                "SELECT trade_date, close FROM silver_prices_1d "
+                "WHERE asset_id = ? AND trade_date >= ? AND trade_date <= ? "
+                "ORDER BY trade_date",
+                [benchmark_asset_id, dates[0], dates[-1]],
+            )
+            if not bm_df.is_empty():
+                close_by_date = {
+                    str(r["trade_date"]): float(r["close"]) for r in bm_df.to_dicts()
+                }
+                prev_close: float | None = None
+                bm_rets: list[float] = []
+                for d in dates:
+                    c = close_by_date.get(d)
+                    if c is not None and prev_close and prev_close > 0:
+                        bm_rets.append(c / prev_close - 1.0)
+                    else:
+                        bm_rets.append(0.0)
+                    if c is not None:
+                        prev_close = c
+                benchmark_returns = bm_rets
+    except Exception as e:
+        logger.warning("Failed to load benchmark for regime timeline %s: %s", run_id, e)
+
+    intervals = build_regime_intervals(dates, scales, nav_values)
+    cycles = count_cycles(intervals)
+    contribution = compute_contribution(dates, scales, portfolio_returns, benchmark_returns)
+
+    return {
+        "run_id": run_id,
+        "applicable": True,
+        "benchmark_asset_id": benchmark_asset_id,
+        "intervals": [itv.to_dict() for itv in intervals],
+        "cycles": cycles,
+        "min_cycles": MIN_REGIME_CYCLES,
+        "sufficient": cycles >= MIN_REGIME_CYCLES,
+        "contribution": contribution,
+        "nav_series": nav_series,
+        "scale_series": [
+            {"date": d, "desired": s, "actual": a}
+            for d, s, a in zip(dates, scales, actual_scales or [None] * len(dates))
+        ],
+    }
+
+
+
 async def get_return_distribution(
     run_id: str,
     catalog: CatalogDep,

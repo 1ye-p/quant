@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { downloadCsv, downloadJson } from '@/lib/download';
 
 interface CompareMetrics {
   backtest_id: string;
@@ -38,8 +39,27 @@ export const CompareMetricsTable: React.FC<CompareMetricsTableProps> = ({ metric
     return values.indexOf(best);
   };
 
+  const exportRows = metrics.map(m => ({
+    strategy_name: m.strategy_name,
+    ...Object.fromEntries(rows.map(r => [r.key, m[r.key as keyof CompareMetrics]])),
+  }));
+
   return (
     <div className="card overflow-hidden">
+      <div className="flex justify-end gap-2 p-2 border-b">
+        <button
+          className="btn-secondary text-xs px-3 py-1"
+          onClick={() => downloadCsv(exportRows, 'compare_metrics.csv')}
+        >
+          {t('component.ui.data_table.export_csv')}
+        </button>
+        <button
+          className="btn-secondary text-xs px-3 py-1"
+          onClick={() => downloadJson(metrics, 'compare_metrics.json')}
+        >
+          {t('component.ui.data_table.export_json')}
+        </button>
+      </div>
       <table className="w-full">
         <thead>
           <tr className="bg-gray-50">

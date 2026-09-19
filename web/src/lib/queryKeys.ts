@@ -32,6 +32,8 @@ export const queryKeys = {
     tradeAnalysis: (id: string) => ['backtests', id, 'trade-analysis'] as const,
     roundTrips: (id: string) => ['backtests', id, 'round-trips'] as const,
     validationSuite: (id: string) => ['backtests', id, 'validation-suite'] as const,
+    regimeTimeline: (id: string) => ['backtests', id, 'regime-timeline'] as const,
+    rank: (ids: string[]) => ['backtests', 'rank', ids] as const,
   },
   knowledge: {
     all: ['knowledge'] as const,

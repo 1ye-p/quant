@@ -12,6 +12,8 @@ from cquant.strategy_dsl.schema import (
     PositionDef,
     StrategyDSL,
 )
+from cquant.strategy_dsl.market_context import MarketSeriesContext
+from cquant.strategy_dsl.regime import RegimeResult, RegimeStateMachine
 
 __all__ = [
     "RegimeDef",
@@ -21,4 +23,7 @@ __all__ = [
     "StateDef",
     "PositionDef",
     "StrategyDSL",
+    "MarketSeriesContext",
+    "RegimeResult",
+    "RegimeStateMachine",
 ]

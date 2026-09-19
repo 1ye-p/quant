@@ -15,6 +15,7 @@ by the future Rust event-driven engine.
 
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import uuid
@@ -70,6 +71,11 @@ class BacktestSpec:
     tags: dict = field(default_factory=dict)
     optimizer: "PortfolioOptimizer | None" = None
     extra: dict = field(default_factory=dict)
+    # Regime state machine (P3S-2) — optional; engine holds it and applies
+    # position_scale to target weights after the optimizer / before risk
+    # checks on each rebalance date. Any object exposing
+    # ``evaluate(as_of_date) -> RegimeResult`` works.
+    regime_sm: "object | None" = None
     # Local RNG seed for reproducible, concurrency-safe runs. When ``None``,
     # any RNG-using components draw from the global state (legacy behaviour).
     # When set, the same seed yields the same result across runs.
@@ -95,6 +101,11 @@ class BacktestResult:
     pretrade_decisions: list[dict] = field(default_factory=list)
     rebalance_dates: list[date] = field(default_factory=list)
     forced_exits: list[dict] = field(default_factory=list)
+    # Regime transparency (P3S-2): [trade_date, desired_scale, actual_scale].
+    # desired = regime position_scale on that rebalance; actual = realized
+    # gross_exposure / nav from the fill simulator (diverges when limit-down /
+    # suspension blocks the de-risking sells). Empty when no regime_sm.
+    regime_scale_history: pl.DataFrame = field(default_factory=pl.DataFrame)
 
     def to_summary_dict(self) -> dict:
         """返回回测结果的核心指标摘要字典。
@@ -509,6 +520,10 @@ class VectorBacktestEngine:
         atr_state: dict = {"atr_values": {}}
         global_stop_state: dict = {"fired_tiers": {}}
 
+        # Regime desired scale per rebalance date (P3S-2) — feeds
+        # regime_scale_history (desired vs actual, checklist #3)
+        regime_desired: dict[date, float] = {}
+
         for i, td in enumerate(trade_dates):
             prev_date = trade_dates[i - 1] if i > 0 else None
             is_rebalance = self._is_rebalance_date(td, prev_date, spec.rebalance_frequency)
@@ -578,6 +593,36 @@ class VectorBacktestEngine:
                         except Exception as _exc:
                             logger.warning("Optimizer skipped for %s: %s", td, _exc)
 
+                    # Regime scaling (P3S-2, checklist #1): applied after the
+                    # optimizer and BEFORE pre-trade risk checks, so policies
+                    # see the de-risked targets.
+                    if spec.regime_sm is not None:
+                        rr = spec.regime_sm.evaluate(td)
+                        regime_desired[td] = rr.position_scale
+                        for w in rr.warnings:
+                            logger.warning("regime %s: %s", td, w)
+                        if rr.position_scale <= 0.0 and (weights_dict or committed_weights):
+                            # Full de-risk: scale → 0 means SELL everything.
+                            # Today's targets are voided; committed positions
+                            # get zero-target sells injected for T+1 with
+                            # retry via pending_force_exits ("regime:" prefix,
+                            # checklist #2) so limit-down/suspension blocked
+                            # sells are re-attempted on subsequent days.
+                            weights_dict = {}
+                            for aid in list(committed_weights.keys()):
+                                pending_force_exits[f"regime:{aid}"] = 0.0
+                                # Immediately stop counting the position
+                                # (mirrors forced-exit full-exit semantics)
+                                del committed_weights[aid]
+                                entry_prices.pop(aid, None)
+                        elif rr.position_scale < 1.0 and weights_dict:
+                            # Partial scaling flows through risk checks /
+                            # FillSimulator naturally (sell of the difference)
+                            weights_dict = {
+                                aid: w * rr.position_scale
+                                for aid, w in weights_dict.items()
+                            }
+
                     # Apply risk policies if configured
                     if spec.risk_policies and weights_dict:
                         # Build positions from previously committed weights (O(1) lookup)
@@ -623,7 +668,17 @@ class VectorBacktestEngine:
 
                     # Always clear on rebalance, regardless of weights_dict
                     force_exited_assets.clear()
-                    pending_force_exits.clear()
+                    # Regime pending sells survive rebalance re-constitution
+                    # (checklist #5: regime and forced-exit/cooldown states
+                    # never clobber each other). Regime keys are dropped only
+                    # when the regime has recovered (scale > 0) or is absent —
+                    # checklist #4: recovery refill is just the next
+                    # rebalance's natural target weights.
+                    for _k in [k for k in pending_force_exits if not k.startswith("regime:")]:
+                        del pending_force_exits[_k]
+                    if spec.regime_sm is None or regime_desired.get(td, 1.0) > 0.0:
+                        for _k in [k for k in pending_force_exits if k.startswith("regime:")]:
+                            del pending_force_exits[_k]
                     # Rebalance fully re-constitutes positions — reset tier
                     # ladders so re-entered assets start fresh
                     global_stop_state["fired_tiers"].clear()
@@ -749,8 +804,14 @@ class VectorBacktestEngine:
             # Re-inject target weight for pending force exits (handles T+1 blocked sells)
             if pending_force_exits and i + 1 < len(trade_dates):
                 next_td = trade_dates[i + 1]
-                for fe_asset, fe_weight in list(pending_force_exits.items()):
-                    all_weights.append({"trade_date": next_td, "asset_id": fe_asset, "target_weight": fe_weight})
+                for fe_key, fe_weight in list(pending_force_exits.items()):
+                    # "regime:{asset}" keys (P3S-2) carry the same retry
+                    # semantics; strip the prefix back to the raw asset_id
+                    all_weights.append({
+                        "trade_date": next_td,
+                        "asset_id": fe_key.removeprefix("regime:"),
+                        "target_weight": fe_weight,
+                    })
 
             # NEXT-BAR EXECUTION: signal on day T, execute on day T+1
             # Only add weights on rebalance days when new signals were generated
@@ -775,6 +836,14 @@ class VectorBacktestEngine:
             target_weights=weights_df,
             prices=prices,
             initial_cash=spec.initial_cash,
+        )
+
+        # Regime transparency (checklist #3): desired_scale (regime decision,
+        # forward-filled across snapshot dates) vs actual_scale (realized
+        # gross_exposure / nav — diverges when de-risking sells are blocked
+        # by limit-down / suspension on the execution day).
+        regime_scale_history = self._build_regime_scale_history(
+            snapshots_df, regime_desired
         )
 
         # Compute portfolio returns from fill simulator NAV
@@ -829,7 +898,45 @@ class VectorBacktestEngine:
             pretrade_decisions=pretrade_decisions,
             rebalance_dates=rebalance_dates,
             forced_exits=forced_exit_log,
+            regime_scale_history=regime_scale_history,
         )
+
+    @staticmethod
+    def _build_regime_scale_history(
+        snapshots: pl.DataFrame,
+        regime_desired: dict[date, float],
+    ) -> pl.DataFrame:
+        """Annotate fill-simulator snapshots with desired/actual regime scale.
+
+        Returns ``[trade_date, desired_scale, actual_scale]`` (empty when no
+        regime was evaluated). *desired_scale* is forward-filled from the
+        rebalance-date decisions; *actual_scale* is realized gross exposure
+        over NAV, clamped to [0, 1].
+        """
+        empty = pl.DataFrame(schema={
+            "trade_date": pl.Date,
+            "desired_scale": pl.Float64,
+            "actual_scale": pl.Float64,
+        })
+        if not regime_desired or snapshots.is_empty():
+            return empty
+
+        desired_dates = sorted(regime_desired.keys())
+        rows: list[dict] = []
+        snap_rows = snapshots.sort("trade_date").to_dicts()
+        for row in snap_rows:
+            td = row["trade_date"]
+            idx = bisect.bisect_right(desired_dates, td) - 1
+            desired = regime_desired[desired_dates[idx]] if idx >= 0 else 1.0
+            nav = row.get("nav") or 0.0
+            gross = row.get("gross_exposure") or 0.0
+            actual = min(1.0, max(0.0, gross / nav)) if nav > 0 else 0.0
+            rows.append({
+                "trade_date": td,
+                "desired_scale": desired,
+                "actual_scale": actual,
+            })
+        return pl.DataFrame(rows)
 
     def _apply_risk_checks(
         self,

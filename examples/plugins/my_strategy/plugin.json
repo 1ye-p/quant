@@ -1,0 +1,14 @@
+{
+  "name": "my_strategy",
+  "version": "0.1.0",
+  "capabilities": ["strategy"],
+  "entrypoints": {
+    "strategy": "my_plugin_strategy:create_strategy"
+  },
+  "markets": ["CN"],
+  "asset_classes": ["equity"],
+  "compatibility": {"cquant": ">=0.1.0"},
+  "description": "Minimal L3 strategy plugin example — top-N by strength with an optional score floor.",
+  "author": "cQuant",
+  "tags": ["example", "l3", "strategy"]
+}

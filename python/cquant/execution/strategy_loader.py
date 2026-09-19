@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cquant.backtest_vector.strategy import Strategy
 from cquant.datahub.catalog import Catalog
+
+if TYPE_CHECKING:
+    from cquant.registry.registry import Registry
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +45,31 @@ def _get_builtin_strategies() -> dict[str, type[Strategy]]:
     return _BUILTIN_STRATEGIES
 
 
-def get_strategy_class(strategy_type: str) -> type[Strategy]:
-    """Resolve strategy class by type name.
+def get_strategy_class(
+    strategy_type: str,
+    registry: "Registry | None" = None,
+) -> type[Strategy]:
+    """Resolve strategy class (or plugin factory) by type name.
 
-    Checks built-in map first, then falls back to registry discovery.
+    Checks built-in map first, then falls back to the plugin registry
+    (capability ``"strategy"`` — the plugin's entrypoint may be a Strategy
+    subclass *or* a factory callable returning one; both are invoked the
+    same way by :meth:`StrategyLoader._build_strategy`).
 
     Parameters
     ----------
     strategy_type:
-        Strategy type name (e.g. "StaticTopN", "MLModel").
+        Strategy type name (e.g. "StaticTopN", "MLModel", or a registered
+        plugin name declaring the ``strategy`` capability).
+    registry:
+        Optional pre-populated :class:`~cquant.registry.registry.Registry`.
+        When omitted, a fresh Registry is created and plugin paths from the
+        ``CQUANT_PLUGIN_PATHS`` env var (colon/comma-separated) are
+        discovered, if set.
 
     Returns
     -------
-    Strategy class.
+    Strategy class or plugin factory callable.
 
     Raises
     ------
@@ -65,11 +80,10 @@ def get_strategy_class(strategy_type: str) -> type[Strategy]:
     if strategy_type in builtin:
         return builtin[strategy_type]
 
-    # Fallback: try registry
+    # Fallback: try registry (built-in capability since P3S-2 / L3)
     try:
-        from cquant.registry.registry import Registry
-
-        registry = Registry()
+        if registry is None:
+            registry = _default_registry()
         factory = registry.resolve("strategy", strategy_type)
         return factory
     except Exception as exc:
@@ -77,6 +91,24 @@ def get_strategy_class(strategy_type: str) -> type[Strategy]:
             f"Unknown strategy type: '{strategy_type}'. "
             f"Available built-in: {sorted(builtin.keys())}"
         ) from exc
+
+
+def _default_registry() -> "Registry":
+    """Build a Registry from ``CQUANT_PLUGIN_PATHS`` (if configured)."""
+    import os
+
+    from cquant.registry.registry import Registry
+
+    reg = Registry()
+    paths = os.environ.get("CQUANT_PLUGIN_PATHS", "")
+    if paths:
+        discovered = reg.discover([
+            p for sep in (":", ",") for p in paths.replace(sep, "\x00").split("\x00")
+            if p
+        ])
+        if not discovered:
+            logger.debug("CQUANT_PLUGIN_PATHS set but no plugins discovered")
+    return reg
 
 
 class StrategyLoader:
@@ -91,8 +123,12 @@ class StrategyLoader:
         strategy = loader.load("my_strategy_id")
     """
 
-    def __init__(self, catalog: Catalog) -> None:
+    def __init__(self, catalog: Catalog, registry: "Registry | None" = None) -> None:
         self._catalog = catalog
+        # Optional plugin registry for the "strategy" capability (L3) —
+        # injected by callers that manage plugin discovery; when None,
+        # get_strategy_class falls back to a CQUANT_PLUGIN_PATHS-based one.
+        self._registry = registry
 
     def load(self, strategy_id: str) -> Strategy:
         """Load and instantiate a strategy by its ID.
@@ -129,7 +165,7 @@ class StrategyLoader:
             config = {}
 
         strategy_type = config.get("strategy_type", "StaticTopN")
-        strategy_cls = get_strategy_class(strategy_type)
+        strategy_cls = get_strategy_class(strategy_type, registry=self._registry)
 
         try:
             strategy = self._build_strategy(strategy_cls, strategy_id, config)

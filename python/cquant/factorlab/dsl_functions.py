@@ -56,6 +56,16 @@ def _cov(col1: pl.Expr, col2: pl.Expr, n: int) -> pl.Expr:
     return pl.rolling_cov(col1, col2, window_size=n)
 
 
+def _pct_change(col: pl.Expr, n: int) -> pl.Expr:
+    """百分比变动: pct_change(close, 5) == delta/lag 等价（spike A 验证）。"""
+    return col.pct_change(n)
+
+
+def _zscore(col: pl.Expr, n: int) -> pl.Expr:
+    """滚动 z 分数: zscore(close, 20) == (x - ma)/std 等价（spike A 验证）。"""
+    return (col - col.rolling_mean(window_size=n)) / col.rolling_std(window_size=n)
+
+
 FUNCTIONS: dict[str, tuple[Callable, int, int, str]] = {
     "lag":     (_lag,     2, 2, "滞后 n 期: lag(close, 5)"),
     "ma":      (_ma,      2, 2, "简单移动平均: ma(close, 20)"),
@@ -73,6 +83,8 @@ FUNCTIONS: dict[str, tuple[Callable, int, int, str]] = {
     "ts_rank": (_ts_rank, 2, 2, "时序排名: ts_rank(close, 20)"),
     "corr":    (_corr,    3, 3, "滚动相关系数: corr(close, volume, 10)"),
     "cov":     (_cov,     3, 3, "滚动协方差: cov(close, volume, 10)"),
+    "pct_change": (_pct_change, 2, 2, "百分比变动: pct_change(close, 5)"),
+    "zscore":  (_zscore,  2, 2, "滚动 z 分数: zscore(close, 20)"),
 }
 
 # NOTE: DSL `close`/`open`/`high`/`low` 为复权价（adj_factor 缩放后）

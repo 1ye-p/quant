@@ -23,6 +23,12 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
+# Sector/block indices (TDX 880xxx/881xxx) are stored alongside stocks with a
+# bare '88' symbol prefix after the exchange tag (e.g. 'SSE:880004'). They are
+# excluded from stock universes by default to avoid polluting coverage counts
+# and cross-sectional statistics.
+_INDEX_EXCLUSION = "asset_id NOT LIKE '%:88%'"
+
 
 @dataclass
 class UniverseEntry:
@@ -57,14 +63,15 @@ class PointInTimeUniverse:
         A DuckDB Catalog instance.
     metadata_table : str
         Table containing stock metadata with list_date, delist_date columns.
+        Default is ``silver_assets``.
     """
 
     def __init__(
         self,
         catalog: Any,
-        metadata_table: str = "silver_stock_info",
+        metadata_table: str = "silver_assets",
     ):
-        _ALLOWED_TABLES = {"silver_stock_info", "silver_fundamentals"}
+        _ALLOWED_TABLES = {"silver_assets", "silver_fundamentals"}
         if metadata_table not in _ALLOWED_TABLES:
             raise ValueError(f"metadata_table '{metadata_table}' not in allowed tables: {_ALLOWED_TABLES}")
         self.catalog = catalog
@@ -74,6 +81,7 @@ class PointInTimeUniverse:
         self,
         as_of_date: str,
         include_delisted: bool = False,
+        include_indices: bool = False,
     ) -> list[UniverseEntry]:
         """Get the active stock universe at a specific date.
 
@@ -84,6 +92,9 @@ class PointInTimeUniverse:
         include_delisted : bool
             If True, include stocks that were delisted after as_of_date
             but were active on that date.
+        include_indices : bool
+            If True, include sector/block indices ('88' symbol prefix,
+            e.g. 'SSE:880004'). Excluded by default.
 
         Returns
         -------
@@ -92,11 +103,13 @@ class PointInTimeUniverse:
         try:
             # Query: stocks listed before or on as_of_date
             # and either not delisted, or delisted after as_of_date
+            index_cond = "" if include_indices else f"AND {_INDEX_EXCLUSION}"
             query = (
                 f"SELECT asset_id, list_date, delist_date, name, sector "
                 f"FROM {self.metadata_table} "
                 f"WHERE list_date <= ? "
                 f"AND (delist_date IS NULL OR delist_date > ?) "
+                f"{index_cond} "
                 f"ORDER BY asset_id"
             )
             df = self.catalog.query(query, [as_of_date, as_of_date])
@@ -137,10 +150,11 @@ class PointInTimeUniverse:
         pl.DataFrame
             Columns: date, asset_id, is_active
         """
-        # Load all stock info
+        # Load all stock info (sector indices excluded from stock universes)
         try:
             info_df = self.catalog.query(
-                f"SELECT asset_id, list_date, delist_date FROM {self.metadata_table}"
+                f"SELECT asset_id, list_date, delist_date FROM {self.metadata_table} "
+                f"WHERE {_INDEX_EXCLUSION}"
             )
         except Exception as e:
             logger.warning("Failed to load stock info: %s", e)
@@ -192,7 +206,8 @@ class PointInTimeUniverse:
         """
         try:
             info_df = self.catalog.query(
-                f"SELECT asset_id, list_date, delist_date FROM {self.metadata_table}"
+                f"SELECT asset_id, list_date, delist_date FROM {self.metadata_table} "
+                f"WHERE {_INDEX_EXCLUSION}"
             )
         except Exception:
             return {}

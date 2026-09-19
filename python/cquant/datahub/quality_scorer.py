@@ -114,6 +114,15 @@ class DataQualityReport:
 _WEIGHTS = {"completeness": 0.45, "consistency": 0.35, "freshness": 0.20}
 
 
+class QualityQueryError(RuntimeError):
+    """Raised when the quality scorer cannot query the target table.
+
+    Previously this failure mode returned an all-zero report, which was
+    indistinguishable from a legitimately terrible dataset. Callers should
+    surface this error (e.g. HTTP 500) instead of presenting fake zeros.
+    """
+
+
 class DataQualityScorer:
     """Score data quality for market data tables.
 
@@ -128,7 +137,7 @@ class DataQualityScorer:
 
     def score(
         self,
-        table_name: str = "silver_daily",
+        table_name: str = "silver_prices_1d",
         start_date: str = "2024-01-01",
         end_date: str = "2025-12-31",
     ) -> DataQualityReport:
@@ -155,11 +164,9 @@ class DataQualityScorer:
             )
         except Exception as e:
             logger.error("Failed to query %s: %s", table_name, e)
-            # Return a zero-quality report
-            empty_comp = CompletenessReport(0, 0, 0, 1.0, 0)
-            empty_cons = ConsistencyReport(0, 0, 1.0, 0, 0, 0, 0)
-            empty_fresh = FreshnessReport(0, "", "", 999, True)
-            return DataQualityReport(0, empty_comp, empty_cons, empty_fresh, table_name, (start_date, end_date))
+            raise QualityQueryError(
+                f"Failed to query table '{table_name}' for quality scoring: {e}"
+            ) from e
 
         if df.is_empty():
             empty_comp = CompletenessReport(0, 0, 0, 1.0, 0)

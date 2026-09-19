@@ -69,12 +69,30 @@ async def get_dataset_quality(
     ver_cond = "AND dataset_version = ?" if has_version_col and version else ""
     ver_params = [version] if has_version_col and version else []
 
+    # Anchor all recency windows to the data's own latest trade_date, not
+    # CURRENT_DATE — stale-but-healthy datasets must still report coverage.
+    anchor_df = catalog.query(
+        f"SELECT MAX(trade_date) as anchor FROM silver_prices_1d WHERE 1=1 {ver_cond}",
+        ver_params,
+    )
+    anchor = (
+        anchor_df.to_dicts()[0].get("anchor") if not anchor_df.is_empty() else None
+    )
+    if anchor is None:
+        from datetime import date as _date
+        anchor = _date.today()
+    anchor_30 = str(anchor)[:10]
+    from datetime import datetime as _dt, timedelta as _td
+    a30 = (_dt.strptime(anchor_30, "%Y-%m-%d") - _td(days=30)).strftime("%Y-%m-%d")
+    a90 = (_dt.strptime(anchor_30, "%Y-%m-%d") - _td(days=90)).strftime("%Y-%m-%d")
+
     basic_df = catalog.query(
         f"SELECT COUNT(DISTINCT asset_id) as n_assets, "
         f"MIN(trade_date) as min_date, "
         f"MAX(trade_date) as max_date, "
         f"COUNT(*) as total_rows "
-        f"FROM silver_prices_1d WHERE 1=1 {ver_cond}",
+        f"FROM silver_prices_1d "
+        f"WHERE asset_id NOT LIKE '%:88%' {ver_cond}",
         ver_params,
     )
     stats = basic_df.to_dicts()[0] if not basic_df.is_empty() else {}
@@ -82,8 +100,9 @@ async def get_dataset_quality(
     recent_df = catalog.query(
         f"SELECT COUNT(DISTINCT asset_id) as recent_assets "
         f"FROM silver_prices_1d "
-        f"WHERE trade_date >= CURRENT_DATE - INTERVAL '30 days' {ver_cond}",
-        ver_params,
+        f"WHERE asset_id NOT LIKE '%:88%' "
+        f"AND trade_date >= ? {ver_cond}",
+        [a30] + ver_params,
     )
     stats["recent_assets"] = (
         recent_df.to_dicts()[0].get("recent_assets", 0) if not recent_df.is_empty() else 0
@@ -116,9 +135,10 @@ async def get_dataset_quality(
     daily_df = catalog.query(
         f"SELECT trade_date, COUNT(DISTINCT asset_id) as n_assets "
         f"FROM silver_prices_1d "
-        f"WHERE trade_date >= CURRENT_DATE - INTERVAL '30 days' {ver_cond} "
+        f"WHERE asset_id NOT LIKE '%:88%' "
+        f"AND trade_date >= ? {ver_cond} "
         f"GROUP BY trade_date ORDER BY trade_date",
-        ver_params,
+        [a30] + ver_params,
     )
     daily_coverage = (
         [{"trade_date": str(r["trade_date"]), "n_assets": r["n_assets"]}
@@ -130,9 +150,10 @@ async def get_dataset_quality(
     bottom_df = catalog.query(
         f"SELECT asset_id, COUNT(*) as valid_days "
         f"FROM silver_prices_1d "
-        f"WHERE trade_date >= CURRENT_DATE - INTERVAL '90 days' {ver_cond} "
+        f"WHERE asset_id NOT LIKE '%:88%' "
+        f"AND trade_date >= ? {ver_cond} "
         f"GROUP BY asset_id ORDER BY valid_days ASC LIMIT ?",
-        ver_params + [sample_assets],
+        [a90] + ver_params + [sample_assets],
     )
     bottom_assets = bottom_df.to_dicts() if not bottom_df.is_empty() else []
 
@@ -163,9 +184,12 @@ async def list_universes(catalog: CatalogDep) -> dict:
         {"id": "idx_kcb50", "name": "科创50", "description": "上证科创板50成分指数"},
     ]
     try:
+        # Anchor to the data's latest trade_date (not CURRENT_DATE) and exclude
+        # sector indices ('88' symbol prefix) from the stock count.
         count_df = catalog.query(
             "SELECT COUNT(DISTINCT asset_id) AS n FROM silver_prices_1d "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '30 days'"
+            "WHERE asset_id NOT LIKE '%:88%' "
+            "AND trade_date >= (SELECT MAX(trade_date) FROM silver_prices_1d) - INTERVAL '30 days'"
         )
         total_assets = int(count_df["n"][0]) if not count_df.is_empty() else 0
     except Exception:
@@ -441,15 +465,20 @@ async def get_data_quality(
     end_date: str = "2025-12-31",
 ) -> dict:
     """Data quality scoring for a market data table."""
-    from cquant.datahub.quality_scorer import DataQualityScorer
+    from cquant.datahub.quality_scorer import DataQualityScorer, QualityQueryError
 
-    # Sanitize table name to prevent SQL injection
-    allowed_tables = {"silver_daily", "silver_fundamentals", "silver_stock_info", "bronze_daily"}
+    # Sanitize table name to prevent SQL injection (real tables only —
+    # silver_daily / silver_stock_info / bronze_daily never existed).
+    allowed_tables = {"silver_prices_1d", "silver_fundamentals", "silver_assets"}
     if table_name not in allowed_tables:
         raise HTTPException(status_code=400, detail=f"Table '{table_name}' not in allowed list")
 
     scorer = DataQualityScorer(catalog)
-    report = scorer.score(table_name, start_date, end_date)
+    try:
+        report = scorer.score(table_name, start_date, end_date)
+    except QualityQueryError as exc:
+        # Surface the failure instead of silently returning an all-zero report.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return report.to_dict()
 
 
@@ -584,11 +613,13 @@ async def get_quality_report(version_id: str, catalog: CatalogDep) -> dict:
 
 @router.get("/{version_id}/anomalies")
 async def get_anomalies(version_id: str, catalog: CatalogDep, limit: int = 20) -> dict:
-    """获取数据异常标记（涨跌幅 > 25%）。"""
+    """获取数据异常标记（涨跌幅 > 25%）。默认排除 88 开头板块指数。"""
     df = catalog.query(
         "SELECT asset_id, trade_date, close, "
         "LAG(close) OVER (PARTITION BY asset_id ORDER BY trade_date) as prev_close "
-        "FROM silver_prices_1d ORDER BY trade_date DESC LIMIT 10000"
+        "FROM silver_prices_1d "
+        "WHERE asset_id NOT LIKE '%:88%' "
+        "ORDER BY trade_date DESC LIMIT 10000"
     )
     if df.is_empty():
         return {"items": []}

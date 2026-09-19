@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -130,6 +133,43 @@ async def compute_ic_matrix(
     return {"job_id": job_id, "status": "submitted"}
 
 
+# 已物化因子集合的短 TTL 缓存：gold_factor_values 是千万行级大表，
+# /available 高频端点不应每请求都跑 SELECT DISTINCT。
+_materialized_cache: tuple[float, frozenset] | None = None  # (monotonic_ts, names)
+_materialized_cache_lock = threading.Lock()
+
+
+def _materialized_cache_ttl() -> float:
+    """TTL 秒数，env CQUANT_FACTOR_CATALOG_TTL_SEC（默认 60，0=禁用缓存）。"""
+    raw = os.getenv("CQUANT_FACTOR_CATALOG_TTL_SEC", "60")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 60.0
+
+
+def _get_materialized_names(catalog) -> set:
+    """带 TTL 缓存的已物化因子集合查询。"""
+    global _materialized_cache
+    ttl = _materialized_cache_ttl()
+    if ttl > 0:
+        cached = _materialized_cache
+        if cached is not None and (time.monotonic() - cached[0]) < ttl:
+            return set(cached[1])
+
+    try:
+        df = catalog.query("SELECT DISTINCT factor_name FROM gold_factor_values")
+        materialized = set(df["factor_name"].to_list()) if not df.is_empty() else set()
+    except Exception as exc:
+        logger.debug("gold_factor_values unavailable: %s", exc)
+        materialized = set()
+
+    if ttl > 0:
+        with _materialized_cache_lock:
+            _materialized_cache = (time.monotonic(), frozenset(materialized))
+    return materialized
+
+
 def _factor_catalog_state(catalog) -> tuple[dict, set, list[dict]]:
     """单一事实源：因子目录状态（注册表 + 已物化 + 自定义）。
 
@@ -140,13 +180,8 @@ def _factor_catalog_state(catalog) -> tuple[dict, set, list[dict]]:
 
     builtin_by_name = {f.name: f for f in BUILTIN_FACTORS}
 
-    # 已物化因子：gold_factor_values 的 factor_name distinct
-    try:
-        df = catalog.query("SELECT DISTINCT factor_name FROM gold_factor_values")
-        materialized = set(df["factor_name"].to_list()) if not df.is_empty() else set()
-    except Exception as exc:
-        logger.debug("gold_factor_values unavailable: %s", exc)
-        materialized = set()
+    # 已物化因子：gold_factor_values 的 factor_name distinct（短 TTL 缓存）
+    materialized = _get_materialized_names(catalog)
 
     # 自定义因子
     custom_rows: list[dict] = []
@@ -987,9 +1022,11 @@ _factors_cache: dict | None = None
 
 
 def _invalidate_factors_cache() -> None:
-    """自定义因子 CRUD 后清空静态描述缓存，使下次请求重新装配。"""
-    global _factors_cache
+    """自定义因子 CRUD 后清空静态描述缓存与已物化集合缓存，使下次请求重新装配。"""
+    global _factors_cache, _materialized_cache
     _factors_cache = None
+    with _materialized_cache_lock:
+        _materialized_cache = None
 
 
 def _load_description_map() -> dict[str, dict]:

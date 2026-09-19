@@ -177,3 +177,59 @@ def test_custom_factor_end_to_end(catalog: StubCatalog) -> None:
     assert load_custom_factors(empty_stub) == [] or all(
         isinstance(x, ExpressionFactor) for x in load_custom_factors(empty_stub)
     )
+
+
+# ── 6. 已物化集合 TTL 缓存：TTL 内不重查，失效后重查 ────────────────────────
+
+def test_materialized_cache_ttl(catalog: StubCatalog, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CQUANT_FACTOR_CATALOG_TTL_SEC", "60")
+    factors_routes._invalidate_factors_cache()
+
+    counter = {"n": 0}
+    orig_query = catalog.query
+
+    def counting_query(sql: str, params: list | None = None) -> pl.DataFrame:
+        if "DISTINCT factor_name FROM gold_factor_values" in sql:
+            counter["n"] += 1
+        return orig_query(sql, params)
+
+    catalog.query = counting_query  # type: ignore[method-assign]
+
+    _, m1, _ = factors_routes._factor_catalog_state(catalog)
+    _, m2, _ = factors_routes._factor_catalog_state(catalog)
+    assert counter["n"] == 1, "TTL 内第二次调用不应重查 DISTINCT"
+    assert m1 == m2 and "ret_20d" in m1
+
+    # 失效后重查
+    factors_routes._invalidate_factors_cache()
+    _, m3, _ = factors_routes._factor_catalog_state(catalog)
+    assert counter["n"] == 2, "失效后应重新查询"
+    assert m3 == m1
+
+    # TTL=0 禁用缓存：每次都重查
+    monkeypatch.setenv("CQUANT_FACTOR_CATALOG_TTL_SEC", "0")
+    factors_routes._factor_catalog_state(catalog)
+    factors_routes._factor_catalog_state(catalog)
+    assert counter["n"] == 4, "TTL=0 应禁用缓存，每次都重查"
+
+
+# ── 7. custom 与 builtin 同名 → 409 拒绝 ────────────────────────────────────
+
+def test_custom_name_conflicts_builtin_rejected(catalog: StubCatalog) -> None:
+    from fastapi import HTTPException
+
+    assert "ret_20d" in {f.name for f in BUILTIN_FACTORS}
+    factors_routes._ensure_custom_factor_table(catalog)
+
+    body = factors_routes.CustomFactorCreateBody(
+        name="ret_20d", expression="close / ma(close, 5)", description=""
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(factors_routes.create_custom_factor(body=body, catalog=catalog))
+    assert exc_info.value.status_code == 409
+    assert "内置" in str(exc_info.value.detail)
+    # 未写入数据库
+    n = catalog.query(
+        "SELECT COUNT(*) AS n FROM meta_custom_factors WHERE name = 'ret_20d'"
+    )["n"][0]
+    assert n == 0

@@ -38,7 +38,7 @@ interface Props {
 }
 
 /** 从已有 config_text 提取 dsl_spec → 表单态。 */
-function configToForm(configText: string): StrategyDslFormState | null {
+export function configToForm(configText: string): StrategyDslFormState | null {
   try {
     const parsed = JSON.parse(configText)
     if (parsed?.strategy_type !== 'DSL' || !parsed?.dsl_spec) return null
@@ -63,7 +63,7 @@ function configToForm(configText: string): StrategyDslFormState | null {
             reevaluate: d.regime.reevaluate ?? null,
             states: d.regime.states ?? null,
             rules: d.regime.rules?.map((r) => ({
-              when: r.when ?? null,
+              when: r.when || null,
               position_scale: r.position_scale,
             })) ?? null,
             scale_expr: d.regime.scale_expr ?? null,

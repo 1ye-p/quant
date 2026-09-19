@@ -247,6 +247,9 @@ class BacktestCreateBody(BaseModel):
     penalty_per_missing: float = 0.5
     # MultiFactor weights (UI strategy config -> engine). None = legacy fallback.
     factor_weights: dict[str, float] | None = None
+    # DSL strategy spec (StrategyDSL dict). None = read from strategy config
+    # when strategy_type == "DSL" (same config-priority semantics as factor_weights).
+    dsl_spec: dict | None = None
     # BreakoutPullback params
     breakout_config: dict | None = None
 
@@ -336,6 +339,13 @@ async def create_backtest(
 
     # ML strategy params: read from strategy config first, then request body
     strategy_type = body.strategy_type if body.strategy_type != "StaticTopN" else parsed.get("strategy_type", "StaticTopN")
+
+    # DSL spec: strategy config first (dslToStrategyConfig stores dsl_spec in
+    # the saved config); an explicit non-None body value overrides for a
+    # single run (same semantics as factor_weights above).
+    dsl_spec = body.dsl_spec
+    if dsl_spec is None and strategy_type == "DSL":
+        dsl_spec = parsed.get("dsl_spec")
     model_version = body.model_version or parsed.get("model_id", "")
     label_name = body.label_name if body.label_name != "ret_5d" else parsed.get("label_name", "ret_5d")
 
@@ -530,6 +540,7 @@ async def create_backtest(
         penalty_per_missing=penalty_per_missing,
         breakout_config=body.breakout_config or parsed.get("breakout_config", {}),
         factor_weights=factor_weights,
+        dsl_spec=dsl_spec or {},
     )
 
     _ensure_schema_extensions(catalog)

@@ -227,3 +227,75 @@ def test_route_empty_dict_rejected(_route_env):
         _run_route(_body(factor_weights={}))
     assert exc_info.value.status_code == 400
     assert "不能为空" in exc_info.value.detail
+
+
+# ── DSL spec route-level wiring (same config-priority semantics) ─────────────
+
+DSL_CFG_SPEC = {
+    "name": "dsl_demo",
+    "universe": "all",
+    "frequency": "daily",
+    "score": [{"factor": "ret_20d", "weight": 1.0}],
+    "position": {"method": "equal_weight", "params": {}, "constraints": {}},
+    "risk": [],
+}
+DSL_CFG_JSON = json.dumps({
+    "strategy_type": "DSL",
+    "strategy_id": "dsl_demo",
+    "dsl_spec": DSL_CFG_SPEC,
+})
+
+
+class _DslStubCatalog(_StubCatalog):
+    """Catalog stub returning a DSL strategy config."""
+
+    def __init__(self):
+        self._first = True
+
+    def query(self, sql, params=None):
+        if self._first and "meta_strategy_configs" in sql:
+            self._first = False
+            return pl.DataFrame({"parsed_config": [DSL_CFG_JSON]})
+        return pl.DataFrame()
+
+
+def _dsl_body(**kwargs):
+    base = dict(
+        strategy_id="dsl_demo",
+        dataset_version="test_ds",
+        start_date="2025-01-01",
+        end_date="2025-06-30",
+        strategy_type="DSL",
+    )
+    base.update(kwargs)
+    return bt_routes.BacktestCreateBody(**base)
+
+
+def _run_dsl_route(body, catalog) -> dict:
+    import asyncio
+
+    bt = BackgroundTasks()
+    result = asyncio.run(bt_routes.create_backtest(body, bt, catalog))
+    assert result["status"] == "running"
+    for task in bt.tasks:
+        task.args[0]()
+    return result
+
+
+def test_route_dsl_spec_body_passthrough(_route_env):
+    """body 带 dsl_spec + strategy_type=DSL → spec.dsl_spec 透传（body 优先）。"""
+    captured = _route_env
+    body_spec = dict(DSL_CFG_SPEC, name="body_override")
+
+    _run_dsl_route(_dsl_body(dsl_spec=body_spec), _DslStubCatalog())
+    assert captured["spec"].dsl_spec == body_spec
+    assert captured["spec"].strategy_type == "DSL"
+
+
+def test_route_dsl_spec_config_fallback(_route_env):
+    """策略配置带 dsl_spec 而 body 不带 → 也透传（config 优先语义）。"""
+    captured = _route_env
+
+    _run_dsl_route(_dsl_body(), _DslStubCatalog())
+    assert captured["spec"].dsl_spec == DSL_CFG_SPEC
+    assert captured["spec"].strategy_type == "DSL"

@@ -346,6 +346,25 @@ async def create_backtest(
     dsl_spec = body.dsl_spec
     if dsl_spec is None and strategy_type == "DSL":
         dsl_spec = parsed.get("dsl_spec")
+
+    # Request-time DSL validation: reject malformed/missing specs with 400
+    # instead of failing asynchronously inside the background job.
+    if strategy_type == "DSL":
+        if not dsl_spec:
+            raise HTTPException(
+                status_code=400,
+                detail="dsl_spec is required for DSL strategy (in request body or saved strategy config).",
+            )
+        from cquant.strategy_dsl.schema import StrategyDSL
+        from pydantic import ValidationError as PydanticValidationError
+        try:
+            StrategyDSL.from_dict(dsl_spec)
+        except PydanticValidationError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dsl_spec: {e.errors()[:5]}",
+            )
+
     model_version = body.model_version or parsed.get("model_id", "")
     label_name = body.label_name if body.label_name != "ret_5d" else parsed.get("label_name", "ret_5d")
 

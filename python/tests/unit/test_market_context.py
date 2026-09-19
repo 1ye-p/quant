@@ -35,13 +35,20 @@ class FakeCatalog:
     def query(self, sql: str, params: list) -> pl.DataFrame:
         indicator_key, _asset_id, as_of = params
         self.queries.append((indicator_key, as_of))
-        rows = [
-            (d, v) for (d, avail, v) in self.table.get(indicator_key, [])
+        matched = [
+            (d, avail, v) for (d, avail, v) in self.table.get(indicator_key, [])
             if avail <= as_of
         ]
+        # include_available_date variant also surfaces the availability date
+        if "AS available_date" in sql:
+            return pl.DataFrame({
+                "trade_date": [r[0] for r in matched],
+                "value": [r[2] for r in matched],
+                "available_date": [r[1] for r in matched],
+            })
         return pl.DataFrame({
-            "trade_date": [r[0] for r in rows],
-            "value": [r[1] for r in rows],
+            "trade_date": [r[0] for r in matched],
+            "value": [r[2] for r in matched],
         })
 
 
@@ -162,3 +169,64 @@ class TestMultiIndicatorPanel:
         )
         # idx20: cap≈140>100 → 1, turn=70>50 → 1 → Int8 sum = 2
         assert out == 2.0
+
+
+class TestPanelCache:
+    """Bounded LRU caching (fix round 1): full-history per-key + as_of filter."""
+
+    def test_panel_cache_bounded(self, monkeypatch) -> None:
+        """Exceeding the LRU cap evicts old keys (verified via load counter)."""
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "2")
+        table = {f"k{i}": [(_d(j), _d(j), 1.0 * j) for j in range(5)] for i in range(4)}
+        ctx = MarketSeriesContext(FakeCatalog(table))
+        for i in range(4):
+            ctx.series(f"k{i}", _d(4))
+        # cap=2 → only the 2 most recent keys stay cached
+        assert len(ctx._raw_cache) == 2
+        assert set(ctx._raw_cache) == {"k2", "k3"}
+        assert ctx.load_count == 4  # one underlying query per key
+        # re-hitting an evicted key reloads; a cached key does not
+        ctx.series("k3", _d(4))
+        assert ctx.load_count == 4
+        ctx.series("k0", _d(4))
+        assert ctx.load_count == 5
+
+    def test_panel_cache_reuses_query_across_as_of(self, monkeypatch) -> None:
+        """Multiple as_of dates on one key → a single underlying query."""
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "32")
+        ctx = MarketSeriesContext(FakeCatalog(_full_table()))
+        for i in (5, 10, 15, 20):
+            ctx.series("active_cap", _d(i))
+        assert ctx.load_count == 1
+
+    def test_panel_cache_disabled(self, monkeypatch) -> None:
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "0")
+        ctx = MarketSeriesContext(FakeCatalog(_full_table()))
+        for i in (5, 10, 15):
+            ctx.series("active_cap", _d(i))
+        assert ctx.load_count == 3  # every call hits the catalog
+        assert ctx._raw_cache == {} and ctx._panel_cache == {}
+
+    def test_cached_panel_matches_uncached_pit_view(self, monkeypatch) -> None:
+        """Cached full-history view must equal a fresh per-as_of query,
+        including late-arriving rows (PIT null-out) and multi-indicator joins."""
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "32")
+        table = {
+            "cap": [(_d(i), _d(i + 3 if 5 <= i <= 9 else i), VALS[i]) for i in range(N)],
+            "turn": [(_d(i), _d(i), 50.0 + i) for i in range(N)],
+        }
+        ind = {"cap": "cap", "turn": "turn"}
+        cached_ctx = MarketSeriesContext(FakeCatalog(table))
+        fresh_ctx = MarketSeriesContext(FakeCatalog(table))
+        monkeypatch.setenv("CQUANT_MARKET_PANEL_CACHE", "0")
+        uncached_ctx = MarketSeriesContext(FakeCatalog(table))
+        for i in (3, 7, 10, 15, 25):
+            got = cached_ctx.panel(_d(i), ind)
+            want = uncached_ctx.panel(_d(i), ind)
+            assert got.equals(want), f"cached panel diverges at as_of={_d(i)}"
+        # expression equivalence too (i=7's last row is a late cap row →
+        # null ma in BOTH paths — the ValueError is itself the shared behavior)
+        for i in (12, 20):
+            a = cached_ctx.evaluate("ma(cap, 5)", _d(i), ind)
+            b = uncached_ctx.evaluate("ma(cap, 5)", _d(i), ind)
+            assert abs(a - b) < 1e-12

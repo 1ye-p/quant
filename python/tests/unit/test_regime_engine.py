@@ -315,3 +315,19 @@ class TestRegimeStateMachine:
         assert sm.evaluate(date(2025, 1, 6)).position_scale == 1.0   # clamp high
         assert sm.evaluate(date(2025, 1, 7)).position_scale == 0.0   # clamp low
         assert abs(sm.evaluate(date(2025, 1, 8)).position_scale - 0.7) < 1e-12
+
+
+class TestHoldStateWarnings:
+    def test_hold_state_warnings_not_accumulating(self) -> None:
+        """Consecutive missing-data days must not forward-accumulate warnings."""
+        d = RegimeDef(mode="continuous", scale_expr="zscore(x, 20)")
+        ok_day = date(2025, 3, 1)
+        ctx = StubMarketCtx({("zscore(x, 20)", ok_day): 0.3})
+        sm = RegimeStateMachine(d, ctx)  # type: ignore[arg-type]
+        sm.evaluate(ok_day)
+        results = [sm.evaluate(ok_day + timedelta(days=i)) for i in (1, 2, 3)]
+        assert all(r.warnings for r in results), "each day must surface its own warning"
+        assert all(len(r.warnings) <= 2 for r in results)
+        assert len(results[2].warnings) == 1  # day 3: exactly the day's reason
+        # scale/state still carried forward
+        assert abs(results[2].position_scale - 0.3) < 1e-12

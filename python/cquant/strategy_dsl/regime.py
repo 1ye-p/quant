@@ -138,12 +138,16 @@ class RegimeStateMachine:
         return value != 0.0
 
     def _hold_state(self, as_of: date, reason: str) -> RegimeResult:
-        """数据缺失/求值失败：保持上一状态，仅追加 warning。"""
+        """数据缺失/求值失败：保持上一状态，仅记当日 warning。
+
+        warnings 只含当日 reason（逐日前向累积会造成 O(N²) 日志膨胀）；
+        继承的仅是 scale/state。
+        """
         if self._last_result is not None:
             return RegimeResult(
                 position_scale=self._last_result.position_scale,
                 state=self._last_result.state,
-                warnings=[*self._last_result.warnings, reason],
+                warnings=[reason],
                 as_of_date=as_of,
             )
         # 首次求值即失败：switch 回 initial，其余满仓兜底

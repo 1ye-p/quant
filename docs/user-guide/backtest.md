@@ -54,6 +54,20 @@ cQuant 统一使用**复权价**进行回测和因子计算，避免分红/送�
 
 > 复权正确性有专门测试覆盖（`python/tests/` 下的复权测试）。详见 [FAQ - 复权](faq.md)。
 
+### 4.1 复权口径（精确表述）
+
+实际口径来自 `backtest_vector/prices.py::adjusted_ohlc_sql`（回测与因子物化的唯一共享入口）：
+
+| 字段 | 口径 |
+|------|------|
+| `open` / `high` / `low` | `原始价 × adj_factor`（前复权） |
+| `close` | `COALESCE(adj_close, close × adj_factor)` —— 优先使用供应商 `adj_close`，为空时回落到 `close × adj_factor` |
+| `volume` / `amount` | **不复权**（保留真实成交量/成交额，成交量约束按真实盘口执行） |
+
+**分红处理方式**：前复权因子 `adj_factor` 已内含分红除息与送转的影响，即回测价格序列中分红体现为价格因子的平滑调整，**不是**"分红现金到账再投资"的显式建模。若研究需要显式的分红现金流（现金再投资口径），应从 `silver_corporate_actions` 表（`GET /api/v1/datasets/corporate-actions?asset_id=...` 可查单只股票历史）自行构建对照核算。
+
+**除权核对**：当价格序列出现跳空、需要判断是除权还是真实波动时，用同一日期对照 `silver_corporate_actions` 的 `ex_date`（除权除息日）即可区分。
+
 ---
 
 ## 5. 成本模型（CostModel）

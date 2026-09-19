@@ -258,6 +258,50 @@ async def get_data_freshness(catalog: CatalogDep) -> dict:
         return {"last_updated": None, "days_stale": -1}
 
 
+@router.get("/corporate-actions")
+async def get_corporate_actions(
+    catalog: CatalogDep, asset_id: str = "", limit: int = 200
+) -> dict:
+    """返回单只资产的公司行为历史（分红/除权），按 ex_date 升序。
+
+    表可能为空或不存在——统一返回空列表不报错（数据浏览器/前端
+    直接渲染）。``asset_id`` 为空时返回全表最近 ``limit`` 条。
+    """
+    if limit > 1000:
+        limit = 1000
+    try:
+        if asset_id:
+            df = catalog.query(
+                "SELECT action_id, asset_id, action_type, ex_date, record_date, "
+                "pay_date, ratio, cash_amount, currency, description, source "
+                "FROM silver_corporate_actions "
+                "WHERE asset_id = ? ORDER BY ex_date ASC LIMIT ?",
+                [asset_id, limit],
+            )
+        else:
+            df = catalog.query(
+                "SELECT action_id, asset_id, action_type, ex_date, record_date, "
+                "pay_date, ratio, cash_amount, currency, description, source "
+                "FROM silver_corporate_actions "
+                "ORDER BY ex_date DESC LIMIT ?",
+                [limit],
+            )
+    except Exception as exc:
+        logger.debug("get_corporate_actions failed: %s", exc)
+        return {"items": [], "total": 0, "asset_id": asset_id}
+
+    items = [
+        {
+            **row,
+            "ex_date": str(row.get("ex_date") or ""),
+            "record_date": str(row.get("record_date") or ""),
+            "pay_date": str(row.get("pay_date") or ""),
+        }
+        for row in df.to_dicts()
+    ] if not df.is_empty() else []
+    return {"items": items, "total": len(items), "asset_id": asset_id}
+
+
 @router.get("/backtest-trend")
 async def get_backtest_trend(catalog: CatalogDep, days: int = 30) -> dict:
     """返回近 N 天每日回测数量趋势。"""

@@ -192,3 +192,16 @@
 7. **选择器**：搜索/已选置顶/materialized 徽标。
 
 **级别变更**：2-1 🟠→✅、2-2 🟠→✅、2-3 🔴→✅、2-4 🟠→✅、2-5 🔴→✅、3-2 🔴→✅、3-3 🔴→✅、3-8 🟠→✅。课题 A 三段断裂（选因子/配权重/看汇总）全部修复。
+
+---
+
+## 处置结论：摩擦 1-8（除权跳空验证 / 复权披露）已闭环（最小版）✅
+
+**修复**（2026-09-19，本批）：
+1. **corporate_actions 可查**：新增 `GET /api/v1/datasets/corporate-actions?asset_id=SSE:600036`——按 `ex_date` 升序返回该股历史分红/除权（action_type / cash_amount / ratio / record_date / pay_date / source）；表为空或 asset_id 无记录返回空数组不报错。数据通路（Tushare `pro.dividend` 仅取"实施"状态 → `CorporateActionsUpdater` 幂等 upsert）此前已就绪（平台优化 P2-4），本批补齐消费端点。
+2. **复权口径披露**：`docs/user-guide/backtest.md` §4.1 新增"复权口径"小节——如实写明 `adjusted_ohlc_sql` 的实际口径（OHL = 原始价 × adj_factor 前复权；close = COALESCE(adj_close, close × adj_factor)；volume/amount 不复权），并明示**分红以前复权因子平滑体现，非现金再投资口径**；显式分红现金流需从 silver_corporate_actions 自建对照。
+3. **异常区分除权 vs 真实波动**：anomalies 排查时可用 ex_date 对照（文档已写操作路径）；叠加此前 880xxx 指数清洗（99b12e8），top 异常被指数污染的问题已消除。
+
+**裁剪说明**（按 Phase 1 校准建议 #2）：完整版"图表复权切换"（前/后复权一键切换）后移，不阻塞 1-8 闭环判定——研究员现在能"查到"每只股票的除权事件 + "知道"口径是什么，最小闭环达成。
+
+**级别变更**：1-8 🔴 → ✅（最小版；复权切换 UI 留作增强项，不再单列摩擦）。

@@ -45,7 +45,11 @@
       "system": "系统",
       "tasks": "任务管理",
       "alerts": "告警中心",
-      "pipeline": "自动化管道"
+      "pipeline": "自动化管道",
+      "data_browser": [
+        "数据浏览器",
+        "Data Browser"
+      ]
     },
     "risk_policy": {
       "position_limit": "仓位限制",
@@ -3327,6 +3331,33 @@
         "optimize_failed": "优化失败: {{error}}",
         "ml_imported": "ML 预测已导入"
       }
+    },
+    "data_browser": {
+      "title": "数据浏览器",
+      "subtitle": "对白名单数据表进行只读结构化查询（表/列/操作符均经服务端校验）",
+      "presets": "预设查询",
+      "start_date": "开始日期",
+      "end_date": "结束日期",
+      "preset_coverage": "覆盖区间股票数",
+      "preset_ext_ind": "外部指标最近 30 天",
+      "n_assets": "区间内有行情的股票数",
+      "sample_assets": "示例清单",
+      "builder": "结构化查询",
+      "table": "数据表",
+      "columns": "列",
+      "all_columns": "全部",
+      "columns_placeholder": "留空=全部，逗号分隔，如 asset_id, close",
+      "limit": "行数上限（≤1000）",
+      "where": "WHERE 条件",
+      "add_condition": "添加条件",
+      "col": "列名",
+      "value": "值",
+      "value_list": "值（逗号分隔）",
+      "order_by": "排序列",
+      "execute": "执行查询",
+      "results": "查询结果",
+      "no_data": "无数据",
+      "hint": "选择数据表并点击\"执行查询\"，或使用上方预设查询。"
     }
   }
 }

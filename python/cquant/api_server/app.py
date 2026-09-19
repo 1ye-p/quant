@@ -54,6 +54,7 @@ from cquant.api_server.routes import (
     health,
     knowledge,
     plugins,
+    query,
     trading,
     alerts,
     jobs,
@@ -247,6 +248,7 @@ def create_app(
     app.include_router(indicators.router, prefix=prefix, dependencies=_auth)
     app.include_router(market.router, prefix=prefix, dependencies=_auth)
     app.include_router(share.router, prefix=prefix, dependencies=_auth)
+    app.include_router(query.router, prefix=prefix, dependencies=_auth)
 
     logger.info("cQuant API v%s ready — docs at /api/docs", _VERSION)
     return app

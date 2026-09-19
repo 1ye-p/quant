@@ -101,3 +101,6 @@ export type { AlertRule, AlertHistory, NotificationChannel } from './api/alerts'
 
 export { indicatorsApi } from './api/indicators'
 export type { IndicatorInfo, IndicatorParam, IndicatorCategories } from './api/indicators'
+
+export { queryApi } from './api/query'
+export type { QueryBody, QueryWhereClause, QueryOrderByClause, QueryResult, CoverageResult } from './api/query'

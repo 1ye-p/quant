@@ -54,6 +54,7 @@ function useNavGroups() {
         { to: '/trading',  label: t('common.nav.trading') },
         { to: '/news',     label: t('common.nav.news', '消息面') },
         { to: '/datasets', label: t('common.nav.datasets', '数据集') },
+        { to: '/data-browser', label: t('common.nav.data_browser', '数据浏览器') },
       ],
     },
     {

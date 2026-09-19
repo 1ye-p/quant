@@ -45,7 +45,11 @@
       "system": "System",
       "tasks": "Task Manager",
       "alerts": "Alert Center",
-      "pipeline": "Automation Pipeline"
+      "pipeline": "Automation Pipeline",
+      "data_browser": [
+        "数据浏览器",
+        "Data Browser"
+      ]
     },
     "risk_policy": {
       "position_limit": "Position Limit",
@@ -3327,6 +3331,33 @@
         "optimize_failed": "Optimization failed: {{error}}",
         "ml_imported": "ML predictions imported"
       }
+    },
+    "data_browser": {
+      "title": "Data Browser",
+      "subtitle": "Read-only structured queries over whitelisted tables (table/column/operator validated server-side)",
+      "presets": "Preset Queries",
+      "start_date": "Start date",
+      "end_date": "End date",
+      "preset_coverage": "Coverage by date range",
+      "preset_ext_ind": "External indicators (last 30d)",
+      "n_assets": "Assets with prices in range",
+      "sample_assets": "Sample assets",
+      "builder": "Structured Query",
+      "table": "Table",
+      "columns": "Columns",
+      "all_columns": "all",
+      "columns_placeholder": "empty=all, comma-separated, e.g. asset_id, close",
+      "limit": "Row limit (≤1000)",
+      "where": "WHERE clauses",
+      "add_condition": "Add condition",
+      "col": "Column",
+      "value": "Value",
+      "value_list": "Values (comma-separated)",
+      "order_by": "Order by",
+      "execute": "Run query",
+      "results": "Results",
+      "no_data": "No data",
+      "hint": "Pick a table and press \"Run query\", or use a preset above."
     }
   }
 }

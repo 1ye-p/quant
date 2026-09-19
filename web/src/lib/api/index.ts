@@ -132,3 +132,12 @@ export type {
 
 export { marketApi } from './market'
 export type { OHLCV, PriceStats, PricesResponse } from './market'
+
+export { queryApi } from './query'
+export type {
+  QueryBody,
+  QueryWhereClause,
+  QueryOrderByClause,
+  QueryResult,
+  CoverageResult,
+} from './query'

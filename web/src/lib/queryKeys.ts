@@ -40,6 +40,11 @@ export const queryKeys = {
     tags: () => ['knowledge', 'tags'] as const,
     search: (text: string) => ['knowledge', 'search', text] as const,
   },
+  query: {
+    tables: () => ['query', 'tables'] as const,
+    browser: (body: unknown) => ['query', 'browser', body] as const,
+    coverage: (start: string, end: string, inclIdx: boolean) => ['query', 'coverage', start, end, inclIdx] as const,
+  },
 } as const
 
 export const extendedQueryKeys = {

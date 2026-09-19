@@ -5,6 +5,8 @@ import { backtestsApi } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { useEffect } from 'react'
 import { useWorkflowStore } from '@/stores/workflowStore'
+import { ValidationBadge } from '@/components/backtests/ValidationPanel'
+import { DecisionSummaryCard } from '@/components/backtests/DecisionSummaryCard'
 
 type TabDef = { id: string; path: string }
 
@@ -66,7 +68,11 @@ export function BacktestDetailPage() {
           {detail?.strategy_id ?? t('page.backtest.title')}
         </h1>
         <span className="font-mono text-xs text-gray-400">{id.slice(0, 12)}...</span>
+        {detail?.status === 'completed' && <ValidationBadge runId={id} />}
       </div>
+
+      {/* Decision summary card (core metrics + validation verdict) */}
+      {detail?.status === 'completed' && <DecisionSummaryCard detail={detail} />}
 
       {/* Tab navigation */}
       <div className="flex gap-1 mb-4 border-b border-gray-200 overflow-x-auto">

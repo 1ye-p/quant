@@ -3,6 +3,7 @@
  */
 
 import { api, type RequestConfig } from './client'
+import type { ValidationSuite } from '../validationSummary'
 import type {
   Backtest,
   BacktestFill,
@@ -17,6 +18,7 @@ import type {
 
 // Re-export types for backward compatibility
 export type { Backtest as BacktestRun, BacktestFill, WalkForwardConfig, WalkForwardFold }
+export type { ValidationSuite }
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
@@ -202,6 +204,20 @@ export const backtestsApi = {
       `/backtests/${runId}/sensitivity/history`,
       config,
     ),
+
+  // ── Validation Suite (Phase 4 T2) ──────────────────────────────────────────
+
+  /** Trigger the one-click validation suite; poll via pollJob(job_id). */
+  runValidationSuite: (runId: string, config?: RequestConfig) =>
+    api.post<{ job_id: string; run_id: string; status: string }>(
+      `/backtests/${runId}/validation-suite`,
+      {},
+      config,
+    ),
+
+  /** Latest validation suite result. 404 when never run. */
+  getValidationSuite: (runId: string, config?: RequestConfig) =>
+    api.get<ValidationSuite>(`/backtests/${runId}/validation-suite`, config),
 }
 
 // ── Backward-compatible alias ───────────────────────────────────────────────

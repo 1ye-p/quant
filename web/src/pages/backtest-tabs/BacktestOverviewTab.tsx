@@ -14,6 +14,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceL
 import { downloadJson } from '@/lib/download'
 import { SensitivityPanel } from '@/components/backtests/SensitivityPanel'
 import { SensitivityChart } from '@/components/backtests/SensitivityChart'
+import { ValidationPanel } from '@/components/backtests/ValidationPanel'
 
 export function BacktestOverviewTab() {
   const { t } = useTranslation()
@@ -172,6 +173,9 @@ export function BacktestOverviewTab() {
 
   return (
     <div className="space-y-4">
+      {/* Validation suite checklist (tri-state + cost assumptions) */}
+      {detail?.status === 'completed' && <ValidationPanel runId={selectedId} />}
+
       {/* Export / Deploy / Sensitivity buttons */}
       <div className="flex justify-end gap-2">
         {/* Sensitivity analysis button */}

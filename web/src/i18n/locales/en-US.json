@@ -2411,7 +2411,87 @@
         "model-diagnostics": "Model Diagnostics",
         "trade-analysis": "Trade Analysis"
       },
-      "no_benchmark_hint": "No benchmark set"
+      "no_benchmark_hint": "No benchmark set",
+      "validation": {
+        "badge": {
+          "pass": "Validated",
+          "warn": "Warnings",
+          "not_run": "Not validated",
+          "tooltip": {
+            "pass": "All validation suite checks passed",
+            "warn": "Some validation checks failed — see checklist",
+            "not_run": "Validation suite has not been run"
+          }
+        },
+        "checklist": {
+          "title": "Validation Checklist",
+          "empty_hint": "Validation suite not run yet. One click runs walk-forward, PSR/DSR, parameter sensitivity and regime cycle checks.",
+          "run_button": "Run Validation",
+          "rerun_button": "Re-run",
+          "running": "Running…",
+          "run_failed": "Validation suite failed",
+          "pass": "Pass",
+          "fail": "Fail",
+          "unknown": "Undetermined",
+          "psr_pass": "PSR confidence test",
+          "fold_stable": "Fold stability",
+          "sensitivity_flat": "Parameter sensitivity",
+          "regime_cycles": "Regime cycles",
+          "regime_na": "Non-regime strategy: not applicable",
+          "fold_source_slice": "Stability is a full-period slice estimate (not out-of-sample folds)",
+          "th": {
+            "psr": "Threshold: PSR > {{threshold}}",
+            "fold_cv": "Threshold: fold Sharpe CV < {{threshold}}",
+            "sens_cv": "Threshold: perturbed Sharpe CV < {{threshold}}",
+            "regime": "Threshold: cycles ≥ {{threshold}}"
+          }
+        },
+        "cost": {
+          "title": "Cost Assumptions",
+          "defaults_warning": "Using default assumptions",
+          "commission": "Commission",
+          "stamp_duty": "Stamp duty",
+          "slippage": "Slippage",
+          "impact": "Market impact"
+        },
+        "points": {
+          "psr_pass": "PSR passes at 95% confidence",
+          "psr_fail": "PSR below 95% confidence",
+          "psr_unknown": "PSR not computed",
+          "fold_stable": "Fold Sharpe is stable",
+          "fold_unstable": "Fold Sharpe is unstable",
+          "fold_slice": "Stability is a full-period slice estimate (not out-of-sample folds)",
+          "fold_unknown": "Fold stability undetermined",
+          "sensitivity_flat": "Robust under parameter perturbation",
+          "sensitivity_sensitive": "Parameter-sensitive — robustness in doubt",
+          "sensitivity_unknown": "Sensitivity not computed",
+          "regime_sufficient": "Regime cycle sample sufficient",
+          "regime_insufficient": "Regime cycle sample insufficient",
+          "weights_not_refit": "WF weights not refit per fold (D7)"
+        },
+        "next": {
+          "all_pass": "All checks passed: consider small-capital live validation",
+          "psr_fail": "PSR below target: increase sample size or simplify factors",
+          "fold_unstable": "Unstable across folds: inspect period-by-period differences",
+          "sensitivity": "Parameter-sensitive: consider robustification",
+          "regime_cycles": "Insufficient timing cycles: interpret regime results with caution",
+          "default": "Complete the missing validation items before drawing conclusions",
+          "not_run": "Run the validation suite first"
+        },
+        "decision": {
+          "title": "Decision Summary",
+          "points_title": "Credible / questionable points",
+          "next_title": "Suggested next step",
+          "anchors": {
+            "dataset": "Dataset",
+            "strategy": "Strategy",
+            "run": "Run",
+            "created": "Created",
+            "external_source": "External indicator source",
+            "external_na": "N/A"
+          }
+        }
+      }
     },
     "knowledge": {
       "title": "Knowledge Base",

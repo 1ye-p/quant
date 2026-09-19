@@ -2411,7 +2411,87 @@
         "model-diagnostics": "模型诊断",
         "trade-analysis": "交易分析"
       },
-      "no_benchmark_hint": "未设置基准"
+      "no_benchmark_hint": "未设置基准",
+      "validation": {
+        "badge": {
+          "pass": "验证通过",
+          "warn": "验证警告",
+          "not_run": "未验证",
+          "tooltip": {
+            "pass": "验证套件全部检查项通过",
+            "warn": "存在未通过的验证检查项，详见清单",
+            "not_run": "尚未运行一键验证套件"
+          }
+        },
+        "checklist": {
+          "title": "验证清单",
+          "empty_hint": "尚未运行验证套件。一键运行 walk-forward、PSR/DSR、参数敏感性与 regime 周期检查。",
+          "run_button": "一键验证",
+          "rerun_button": "重新验证",
+          "running": "验证中…",
+          "run_failed": "验证套件运行失败",
+          "pass": "通过",
+          "fail": "未通过",
+          "unknown": "未判定",
+          "psr_pass": "PSR 置信检验",
+          "fold_stable": "分段稳定性（fold）",
+          "sensitivity_flat": "参数敏感性",
+          "regime_cycles": "Regime 周期数",
+          "regime_na": "非 regime 策略：本项不适用",
+          "fold_source_slice": "稳定性为全程切片估计（非样本外折）",
+          "th": {
+            "psr": "阈值：PSR > {{threshold}}",
+            "fold_cv": "阈值：fold 夏普 CV < {{threshold}}",
+            "sens_cv": "阈值：扰动夏普 CV < {{threshold}}",
+            "regime": "阈值：周期数 ≥ {{threshold}}"
+          }
+        },
+        "cost": {
+          "title": "成本假设",
+          "defaults_warning": "使用默认假设",
+          "commission": "佣金",
+          "stamp_duty": "印花税",
+          "slippage": "滑点",
+          "impact": "冲击成本"
+        },
+        "points": {
+          "psr_pass": "PSR 95% 置信通过",
+          "psr_fail": "PSR 未达 95% 置信",
+          "psr_unknown": "PSR 未计算",
+          "fold_stable": "分段夏普稳定",
+          "fold_unstable": "分段夏普不稳定",
+          "fold_slice": "稳定性为全程切片估计（非样本外折）",
+          "fold_unknown": "分段稳定性未判定",
+          "sensitivity_flat": "参数扰动下表现平稳",
+          "sensitivity_sensitive": "参数敏感，结论稳健性存疑",
+          "sensitivity_unknown": "敏感性未计算",
+          "regime_sufficient": "Regime 周期样本充足",
+          "regime_insufficient": "Regime 周期样本不足",
+          "weights_not_refit": "WF 权重未逐折重估（D7）"
+        },
+        "next": {
+          "all_pass": "全部检查通过：可考虑小资金实盘验证",
+          "psr_fail": "PSR 未达标：建议增加样本或简化因子",
+          "fold_unstable": "分段不稳定：建议检查不同时段表现差异",
+          "sensitivity": "参数敏感：建议鲁棒化（正则/简化参数）",
+          "regime_cycles": "择时周期样本不足：谨慎解读 regime 结论",
+          "default": "建议补全未完成的验证项后再评估",
+          "not_run": "建议先运行一键验证套件"
+        },
+        "decision": {
+          "title": "决策摘要",
+          "points_title": "可信 / 不可信要点",
+          "next_title": "建议下一步",
+          "anchors": {
+            "dataset": "数据集",
+            "strategy": "策略",
+            "run": "Run",
+            "created": "创建时间",
+            "external_source": "外部指标来源",
+            "external_na": "N/A"
+          }
+        }
+      }
     },
     "knowledge": {
       "title": "知识库",

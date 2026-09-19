@@ -163,3 +163,17 @@
 ---
 
 *本文档为 Phase 0 成功标准 #1（摩擦清单产出 + 优先级校准）的交付物；校准建议经联合评审后由人决定是否落入设计文档 v2.1。*
+
+---
+
+## 处置结论：摩擦 1-1 / 3-1（WAL 损坏）已闭环 ✅
+
+**修复**（2026-09-19，commits `d390cf5` + `455527d`）：
+1. **shutdown 优雅关闭**：`_lifespan` 退出时经 `close_catalog()`（缓存探测，未创建不新建）关闭 catalog → DuckDB close 时自动 checkpoint 清空 WAL。实测 SIGTERM 后 WAL 200B → 清除。
+2. **周期 CHECKPOINT**：Catalog 内建 daemon 线程，`CQUANT_CHECKPOINT_INTERVAL_SEC`（默认 600s，0=禁用），失败 logger.error 不中断；close 时 join(5s) 后关连接。
+3. **启动自愈**：连接失败且错误含 WAL 重放特征（窄匹配：writeaheadlog/wal file/replay）→ 隔离 `.wal.corrupt-<ts>` + 醒目告警（"上次未落盘写入可能丢失，备份于 xxx"）→ 重试。实测损坏 WAL（尾部 checksum 破坏）→ 隔离成功 + 数据存活。Catalog 层实现，CLI 与 API 双路径覆盖。
+4. **全路径 close**：CLI 12 处改 `with Catalog(...)`；mcp_server 3 工具 finally close；advisor `_owns_catalog` 守卫；CLI status 冒烟时实际触发了一次自愈（隔离了旧残留 WAL）——机制在真实路径工作。
+
+**测试**：`test_wal_governance.py` 8 项（close清WAL/checkpoint收缩+数据存活/自愈隔离/误报阴性/线程生命周期×3）+ T4 回归脚本（close→WAL 清除、损坏→隔离+可用、27 测试无回归）。
+
+**级别变更**：🔴 → ✅（研究员不再手删文件；损坏自动隔离有告警）。

@@ -130,34 +130,57 @@ async def compute_ic_matrix(
     return {"job_id": job_id, "status": "submitted"}
 
 
-@router.get("/definitions")
-async def factor_definitions(catalog: CatalogDep) -> dict:
-    """列出所有可用因子定义（内置 + 自定义）。"""
+def _factor_catalog_state(catalog) -> tuple[dict, set, list[dict]]:
+    """单一事实源：因子目录状态（注册表 + 已物化 + 自定义）。
+
+    /available 与 /definitions 共用此函数，消除三套名单漂移。
+    Returns (builtin_by_name, materialized_names, custom_rows).
+    """
     from cquant.factorlab.factors import BUILTIN_FACTORS
 
-    # 内置因子
-    items = [
-        {"name": f.name, "description": f.description, "tags": f.tags, "source": "builtin"}
-        for f in BUILTIN_FACTORS
-    ]
+    builtin_by_name = {f.name: f for f in BUILTIN_FACTORS}
 
-    # 自定义因子（从数据库追加）
+    # 已物化因子：gold_factor_values 的 factor_name distinct
+    try:
+        df = catalog.query("SELECT DISTINCT factor_name FROM gold_factor_values")
+        materialized = set(df["factor_name"].to_list()) if not df.is_empty() else set()
+    except Exception as exc:
+        logger.debug("gold_factor_values unavailable: %s", exc)
+        materialized = set()
+
+    # 自定义因子
+    custom_rows: list[dict] = []
     try:
         _ensure_custom_factor_table(catalog)
         custom_df = catalog.query(
             "SELECT factor_id, name, expression, description FROM meta_custom_factors ORDER BY created_at DESC"
         )
-        for row in custom_df.to_dicts():
-            items.append({
-                "name": row["name"],
-                "description": row["description"] or f"自定义: {row['expression'][:40]}",
-                "tags": ["custom"],
-                "source": "custom",
-                "factor_id": row["factor_id"],
-                "expression": row["expression"],
-            })
-    except Exception:
-        pass  # 表不存在时不影响内置因子
+        if not custom_df.is_empty():
+            custom_rows = custom_df.to_dicts()
+    except Exception as exc:
+        logger.debug("meta_custom_factors unavailable: %s", exc)
+
+    return builtin_by_name, materialized, custom_rows
+
+
+@router.get("/definitions")
+async def factor_definitions(catalog: CatalogDep) -> dict:
+    """列出所有可用因子定义（内置 + 自定义，与 /available 同源）。"""
+    builtin_by_name, _, custom_rows = _factor_catalog_state(catalog)
+
+    items = [
+        {"name": f.name, "description": f.description, "tags": f.tags, "source": "builtin"}
+        for f in builtin_by_name.values()
+    ]
+    for row in custom_rows:
+        items.append({
+            "name": row["name"],
+            "description": row["description"] or f"自定义: {row['expression'][:40]}",
+            "tags": ["custom"],
+            "source": "custom",
+            "factor_id": row["factor_id"],
+            "expression": row["expression"],
+        })
 
     return {"items": items, "total": len(items)}
 
@@ -209,6 +232,7 @@ async def create_custom_factor(body: CustomFactorCreateBody, catalog: CatalogDep
         "INSERT INTO meta_custom_factors (factor_id, name, expression, description) VALUES (?, ?, ?, ?)",
         [factor_id, body.name, body.expression, body.description],
     )
+    _invalidate_factors_cache()
     return {"factor_id": factor_id, "name": body.name, "status": "created"}
 
 
@@ -267,6 +291,7 @@ async def delete_custom_factor(factor_id: str, catalog: CatalogDep) -> dict:
     if existing.is_empty():
         raise HTTPException(status_code=404, detail=f"Custom factor '{factor_id}' not found")
     catalog.execute("DELETE FROM meta_custom_factors WHERE factor_id = ?", [factor_id])
+    _invalidate_factors_cache()
     return {"factor_id": factor_id, "status": "deleted"}
 
 
@@ -957,23 +982,18 @@ async def factor_ic_status(
         logger.warning("factor_ic_status failed: %s", exc)
         return {"items": [], "threshold": threshold, "window_days": window_days, "error": str(exc)}
 
-# Cached factor descriptions (static data, loaded once)
+# Cached static factor descriptions (Alpha360 描述层；动态部分不缓存)
 _factors_cache: dict | None = None
 
 
-@router.get("/available")
-async def list_available_factors() -> dict:
-    """返回所有可用因子（含中文标签），按分类分组。
+def _invalidate_factors_cache() -> None:
+    """自定义因子 CRUD 后清空静态描述缓存，使下次请求重新装配。"""
+    global _factors_cache
+    _factors_cache = None
 
-    数据来源于 Alpha158 + Alpha360 内置因子描述（500+ 因子）。
-    每个因子包含 name, label_zh, label_en, category, description 等字段。
 
-    Returns
-    -------
-    dict
-        ``factors``: 因子列表（按 category 排序）
-        ``categories``: 去重后的分类列表
-    """
+def _load_description_map() -> dict[str, dict]:
+    """静态描述层（Alpha158/360 中文名称、公式等），进程内缓存一次。"""
     global _factors_cache
     if _factors_cache is not None:
         return _factors_cache
@@ -984,35 +1004,97 @@ async def list_available_factors() -> dict:
     try:
         mgr.load_default_descriptions()
         df = mgr.read_all()
+    except Exception:
+        return {}
     finally:
         mgr.close()
 
-    if df.is_empty():
-        return {"factors": [], "categories": []}
+    desc_map: dict[str, dict] = {}
+    if not df.is_empty():
+        for row in df.to_dicts():
+            desc_map[row.get("factor_name", "")] = row
+    _factors_cache = desc_map
+    return desc_map
 
-    factors: list[dict] = []
+
+@router.get("/available")
+async def list_available_factors(catalog: CatalogDep) -> dict:
+    """返回可用因子 = 已物化 ∪ 可注册（内置注册表）∪ 自定义（C3 一致性）。
+
+    - ``factors`` / ``items``: 可运行因子（cQuant 命名），带 ``status``
+      （materialized=已有值 / ready=注册表可跑）和 ``is_custom`` 标注。
+    - ``reference_factors``: Alpha360 描述层参考名单（仅描述用，status=reference，
+      不进默认选择列表）。
+
+    保持既有 ``factors`` + ``categories`` 响应 shape 兼容（前端按 name 渲染）。
+    """
+    builtin_by_name, materialized, custom_rows = _factor_catalog_state(catalog)
+    custom_by_name = {r["name"]: r for r in custom_rows}
+    runnable = set(builtin_by_name) | materialized | set(custom_by_name)
+
+    desc_map = _load_description_map()
+
+    def _desc_fields(name: str, fallback_desc: str) -> dict:
+        d = desc_map.get(name, {})
+        return {
+            "label_zh": d.get("display_name") or name,
+            "description": d.get("description") or fallback_desc,
+            "formula": d.get("formula", ""),
+            "economic_meaning": d.get("economic_meaning", ""),
+            "use_case": d.get("use_case", ""),
+        }
+
+    items: list[dict] = []
     category_map: dict[str, list[str]] = {}
-    for row in df.to_dicts():
-        name = row.get("factor_name", "")
-        category = row.get("category", "未分类")
-        factors.append({
+    for name in sorted(runnable):
+        factor = builtin_by_name.get(name)
+        custom_row = custom_by_name.get(name)
+        if custom_row is not None:
+            category = "自定义因子"
+            fallback = custom_row.get("description") or f"自定义: {custom_row['expression'][:40]}"
+        else:
+            category = (desc_map.get(name, {}) or {}).get("category") or (
+                factor.tags[0] if factor is not None and factor.tags else "未分类"
+            )
+            fallback = factor.description if factor is not None else ""
+        item = {
+            "name": name,
+            "label_en": name,
+            "category": category,
+            "status": "materialized" if name in materialized else "ready",
+            "is_custom": custom_row is not None,
+            **_desc_fields(name, fallback),
+        }
+        items.append(item)
+        category_map.setdefault(category, []).append(name)
+
+    reference_factors: list[dict] = []
+    for name in sorted(set(desc_map) - runnable):
+        row = desc_map[name]
+        reference_factors.append({
             "name": name,
             "label_zh": row.get("display_name", ""),
             "label_en": name,
-            "category": category,
+            "category": row.get("category", "未分类"),
             "description": row.get("description", ""),
             "formula": row.get("formula", ""),
             "economic_meaning": row.get("economic_meaning", ""),
             "use_case": row.get("use_case", ""),
+            "status": "reference",
+            "is_custom": False,
         })
-        category_map.setdefault(category, []).append(name)
 
     categories = [
         {"name": cat, "label_zh": cat, "label_en": cat, "factors": names}
         for cat, names in sorted(category_map.items())
     ]
-    _factors_cache = {"factors": factors, "categories": categories}
-    return _factors_cache
+    return {
+        "factors": items,
+        "items": items,
+        "categories": categories,
+        "reference_factors": reference_factors,
+        "total": len(items),
+    }
 
 
 # ── Factor Templates ─────────────────────────────────────────────────────────

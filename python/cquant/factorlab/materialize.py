@@ -49,7 +49,24 @@ class FactorMaterializer:
     def __init__(self, catalog: Catalog, registry: FactorRegistry) -> None:
         self._catalog = catalog
         self._registry = registry
+        self._ensure_registry_populated()
         self._pipeline = FeaturePipeline(registry)
+
+    def _ensure_registry_populated(self) -> None:
+        """装配点：注册内置因子（若缺失）+ 自定义因子（meta_custom_factors → ExpressionFactor）。
+
+        调用方（CLI/编排器）可能传入空 registry 或仅含子集的 registry；
+        此处统一补齐，使 spec.factor_names 中出现的任何内置/自定义名字都可解析。
+        """
+        from cquant.factorlab.factors import BUILTIN_FACTORS
+        from cquant.factorlab.custom_factor_loader import load_custom_factors
+
+        for factor in BUILTIN_FACTORS:
+            if factor.name not in self._registry:
+                self._registry.register(factor)
+        for custom in load_custom_factors(self._catalog):
+            if custom.name not in self._registry:
+                self._registry.register(custom)
 
     def run(self, spec: FactorMaterializationSpec) -> str:
         """Compute factors and write to gold_factor_values. Returns feature_set_version.

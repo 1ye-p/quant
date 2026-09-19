@@ -219,3 +219,17 @@
 6. **P2-1/P2-2（HARDENING）**：前次已交付（24be3fd/d0b2913），本 Phase 核验跳过。
 
 **级别变更**：1-3 🟠→✅、1-4 🟠→✅、1-5 🔴→✅、1-6 🔴→✅、1-8 🔴→✅。
+
+---
+
+## 处置结论：摩擦 3-5/3-6/3-7/3-9(bug 部分)/C5（Phase 3.5 后端验证修复批）已闭环 ✅
+
+**修复**（2026-09-19，commits `965392a` + `b9a18c6` + `6e8c4eb`）：
+1. **3-5 fills**：复现验证——P0 WAL 修复后自愈（临时 DB 回测 fills 正常落库）；吞失败改透出（error 日志 + run tags `fills_persisted=false`+错误摘要）；5 测试。
+2. **3-6 tca/stress**：非连锁独立根因——gold_bt_tca 全库无 DDL（补）、gold_portfolio_snapshots.portfolio_return 列从未写入（DDL+ALTER 幂等+写入修复）、DuckDB INTERVAL 方言错误（修）。附 export/compare/return-distribution 四端点连带修复。
+3. **3-7 过拟合分析**：/analyze 签名错（AnalysisRunSpec 当 result 首参）→ bt_analyzer 新增 `load_result(run_id, catalog)` 从持久化产物重建 BacktestResult；自动分析失败不再覆盖回测 job status（completed + error 附注）；OverfittingTab 数据源打通（psr/dsr 断言）。
+4. **3-9 export**：html 修复（legacy schema 降级防护）；pdf 降级（weasyprint 系统库损坏 → 501 明确错误 + 前端按钮禁用注记，设计 §3.6 预授权）。
+5. **C5 qty**：run-report quantity→qty + export 模板同步 + 全库 grep。
+6. **Phase 4 前置达成**：过拟合/fills/TCA 三大数据源全部非空。
+
+**级别变更**：3-5 🔴→✅、3-6 🟠→✅、3-7 🔴→✅、3-9 🔴→✅（bug 部分；统一导出推广仍在 Phase 4）。

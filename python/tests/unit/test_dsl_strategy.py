@@ -13,6 +13,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import types
+
 import numpy as np
 import polars as pl
 import pytest
@@ -405,3 +407,83 @@ class TestRunnerIsomorphism:
             "SELECT * FROM gold_signals WHERE signal_set_version = ?", [run_id]
         )
         assert not signals.is_empty()
+
+
+# ── T3: runner DSL 分支加固（context 注入 / sizer+risk 挂载 / registry） ─────
+
+def _insert_custom_factor(cat, name: str = "my_low_vol") -> None:
+    from cquant.factorlab.custom_factor_loader import load_custom_factors
+    load_custom_factors(cat)  # 副作用：CREATE TABLE IF NOT EXISTS meta_custom_factors
+    cat.execute(
+        "DELETE FROM meta_custom_factors WHERE factor_id = ?", [f"cf_{name}"]
+    )
+    cat.execute(
+        "INSERT INTO meta_custom_factors (factor_id, name, expression, description) "
+        "VALUES (?, ?, ?, '')",
+        [f"cf_{name}", name, "rank(-std(ret_20d, 20))"],
+    )
+
+
+class TestRunnerDslHardening:
+    def test_runner_rejects_unknown_factor(self, catalog) -> None:
+        """拼错因子 → 构造期 ValueError（中文报错），不再静默降级。"""
+        cat, _ = catalog
+        runner = BacktestRunner(cat)
+        bad = dict(_DSL_DICT)
+        bad["score"] = [{"factor": "momentum_60x", "weight": 1.0}]
+        spec = BacktestRunSpec(
+            dataset_version="v1", strategy_id="dsl_run",
+            strategy_type="DSL", dsl_spec=bad,
+            start_date=date(2025, 1, 2), end_date=date(2025, 3, 31),
+        )
+        with pytest.raises(ValueError, match="不存在"):
+            runner._build_strategy(spec)
+
+    def test_runner_mounts_sizer_and_risk(self, catalog) -> None:
+        """DSL 分支：sizer 自动挂载、risk_policies 默认合并到 BacktestSpec。"""
+        cat, prices = catalog
+        _insert_custom_factor(cat)
+        dsl = dict(_DSL_DICT)
+        dsl["position"] = {"method": "kelly"}
+
+        captured: dict = {}
+        real_run = BacktestRunner(cat)._engine.run
+
+        def spy(bt_spec):
+            captured["spec"] = bt_spec
+            return real_run(bt_spec)
+
+        runner = BacktestRunner(cat)
+        runner._engine = types.SimpleNamespace(run=spy)
+        run_id = runner.run(BacktestRunSpec(
+            dataset_version="v1",
+            strategy_id="dsl_my_low_vol_rotation",
+            strategy_type="DSL",
+            dsl_spec=dsl,
+            feature_set_version="fsv_dsl",
+            start_date=prices["trade_date"].min(),
+            end_date=prices["trade_date"].max(),
+            initial_cash=Decimal("1_000_000"),
+        ))
+        assert run_id
+        bt_spec = captured["spec"]
+        from cquant.riskguard.sizers.kelly import KellySizer
+        assert bt_spec.sizer is not None
+        assert isinstance(bt_spec.sizer, KellySizer)
+        assert bt_spec.risk_policies
+        assert all(isinstance(p, FixedStopLossPolicy) for p in bt_spec.risk_policies)
+
+    def test_runner_custom_factor_checked(self, catalog) -> None:
+        """custom:not_exist → 构造期报错（registry 注入后检查生效）。"""
+        cat, _ = catalog
+        _insert_custom_factor(cat)  # registry 非空 → custom: 存在性检查激活
+        runner = BacktestRunner(cat)
+        bad = dict(_DSL_DICT)
+        bad["score"] = [{"factor": "custom:not_exist", "weight": 1.0}]
+        spec = BacktestRunSpec(
+            dataset_version="v1", strategy_id="dsl_run",
+            strategy_type="DSL", dsl_spec=bad,
+            start_date=date(2025, 1, 2), end_date=date(2025, 3, 31),
+        )
+        with pytest.raises(ValueError, match="自定义因子"):
+            runner._build_strategy(spec)

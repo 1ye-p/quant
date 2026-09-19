@@ -446,6 +446,15 @@ class BacktestRunner:
         strategy = self._build_strategy(spec)
         cost_model = self._detect_cost_model(prices)
 
+        # DSL: position.method → sizer 自动挂载；risk 段在调用方未显式传
+        # risk_policies 时默认合并（调用方显式传入的优先）。
+        sizer = None
+        risk_policies = spec.risk_policies
+        if spec.strategy_type == "DSL":
+            sizer = strategy.build_sizer()
+            if not risk_policies:
+                risk_policies = strategy.build_risk_policies()
+
         bt_spec = BacktestSpec(
             strategy=strategy,
             prices=prices,
@@ -455,7 +464,8 @@ class BacktestRunner:
             cost_model=cost_model,
             features=features,
             tags=spec.tags,
-            risk_policies=spec.risk_policies,
+            sizer=sizer,
+            risk_policies=risk_policies,
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
         )
@@ -469,7 +479,7 @@ class BacktestRunner:
         self._persist_drawdown_periods(result, run_id)
         self._persist_portfolio_snapshots(result, run_id)
         self._persist_risk_snapshots(result, run_id)
-        self._persist_risk_policy_states(run_id, spec.risk_policies)
+        self._persist_risk_policy_states(run_id, risk_policies)
         if result.pretrade_decisions:
             self._persist_pretrade_decisions(result, run_id)
         return run_id
@@ -1075,6 +1085,36 @@ class BacktestRunner:
         )
         return wide
 
+    def _dsl_validation_context(self):
+        """DSL 校验上下文：因子目录快照（物化 ∪ 内置 ∪ 自定义）。
+
+        known_factors = gold_factor_values distinct ∪ BUILTIN_FACTORS 名；
+        custom_factors / factor_registry 来自 meta_custom_factors（复用
+        custom_factor_loader，与物化管线同源）。catalog 缺失（纯内存场景）
+        返回 (None, {})——schema 层跳过存在性检查。
+        """
+        from cquant.strategy_dsl.schema import ValidationContext
+
+        if self._catalog is None:
+            return None, {}
+        from cquant.factorlab.custom_factor_loader import load_custom_factors
+        from cquant.factorlab.factors import BUILTIN_FACTORS
+
+        known = {f.name for f in BUILTIN_FACTORS}
+        try:
+            df = self._catalog.query(
+                "SELECT DISTINCT factor_name FROM gold_factor_values"
+            )
+            if not df.is_empty():
+                known.update(df["factor_name"].to_list())
+        except Exception as exc:
+            logger.debug("gold_factor_values unavailable for DSL validation: %s", exc)
+        custom = {f.name: f for f in load_custom_factors(self._catalog)}
+        return (
+            ValidationContext(known_factors=known, custom_factors=set(custom)),
+            custom,
+        )
+
     def _build_strategy(self, spec: BacktestRunSpec) -> Strategy:
         if spec.strategy_type == "MLModelStrategy":
             if not spec.model_version:
@@ -1097,9 +1137,11 @@ class BacktestRunner:
                 raise ValueError(
                     "dsl_spec is required for DSL strategy (StrategyDSL dict/YAML config)."
                 )
+            context, factor_registry = self._dsl_validation_context()
             return DSLStrategy(
-                spec=StrategyDSL.from_dict(spec.dsl_spec),
+                spec=StrategyDSL.from_dict(spec.dsl_spec, context=context),
                 catalog=self._catalog,
+                factor_registry=factor_registry,
                 top_n=spec.top_n,
             )
         if spec.strategy_type == "MultiFactor":

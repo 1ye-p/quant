@@ -583,11 +583,12 @@ async def create_backtest(
                 )
                 logger.info("Auto-analysis completed for run %s", run_id)
             except Exception as analysis_exc:
-                # Surface the failure in the job record (status + error) instead
-                # of a silent warning log — the backtest itself completed.
+                # Annotate the failure in the job record's error field, but keep
+                # the backtest's completed status — the backtest itself succeeded
+                # and its run_id is valid; only the follow-up analysis failed.
                 logger.exception("Auto-analysis failed for run %s", run_id)
                 _save_job(
-                    catalog, job_id, "backtest", "failed", run_id=run_id,
+                    catalog, job_id, "backtest", "completed", run_id=run_id,
                     error=(
                         f"Backtest completed (run_id={run_id}) but auto-analysis "
                         f"failed: {str(analysis_exc)[:200]}"

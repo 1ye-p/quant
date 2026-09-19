@@ -204,6 +204,20 @@ class TestLoadResult:
         assert not row.is_empty()
         assert row["psr"][0] is not None and row["dsr"][0] is not None
 
+    def test_reconstructed_spec_has_wf_fields(self, filled_run) -> None:
+        """重建 spec 带 start_date/end_date（WalkForwardRefit use_refit=True 需要）。"""
+        cat, run_id = filled_run
+        result = load_result(run_id, cat)
+        assert isinstance(result.spec.start_date, date)
+        assert isinstance(result.spec.end_date, date)
+        assert result.spec.start_date is not None
+        assert result.spec.end_date is not None
+        assert result.spec.start_date <= result.spec.end_date
+        # 与 snapshots 首末日期一致
+        days = result.portfolio_returns["trade_date"].to_list()
+        assert result.spec.start_date == min(days)
+        assert result.spec.end_date == max(days)
+
 
 # ── T1: /analyze 端点（成功 + 失败透出） ─────────────────────────────────────
 
@@ -247,6 +261,56 @@ class TestAnalyzeEndpoint:
         assert job["status"] == "failed"
         assert job["error"]
         assert "No portfolio snapshots" in job["error"]
+
+
+# ── T1: 回测 job 的自动分析失败语义 ──────────────────────────────────────────
+
+class TestAutoAnalysisFailureSemantics:
+    def test_auto_analysis_failure_keeps_backtest_success(self, catalog, monkeypatch) -> None:
+        """回测成功但自动分析失败 → job 保持 completed，error 附注失败原因。"""
+        import cquant.api_server.routes.backtests as bt_routes
+        import cquant.bt_analyzer.run as bt_analyzer_run
+
+        cat, _ = catalog
+        cat.execute(
+            "INSERT INTO meta_strategy_configs "
+            "(strategy_id, config_format, config_text, parsed_config, created_at, updated_at) "
+            "VALUES ('auto_fail_strat', 'json', '{}', '{}', now(), now())"
+        )
+
+        monkeypatch.setattr(bt_routes, "_run_backtest", lambda catalog, spec: "run_auto_fail")
+        monkeypatch.setattr(bt_analyzer_run, "load_result", lambda run_id, catalog: object())
+        monkeypatch.setattr(
+            bt_analyzer_run, "AnalysisRunner",
+            lambda catalog: type("BrokenRunner", (), {
+                "run": staticmethod(lambda *a, **kw: (_ for _ in ()).throw(
+                    RuntimeError("boom-analysis"))),
+            })(),
+        )
+
+        bt = BackgroundTasks()
+        resp = asyncio.run(bt_routes.create_backtest(
+            bt_routes.BacktestCreateBody(
+                strategy_id="auto_fail_strat",
+                dataset_version="v1",
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            ),
+            bt,
+            cat,
+        ))
+        for task in bt.tasks:
+            task.args[0]()
+
+        job = asyncio.run(get_job_status(resp["job_id"], cat))
+        assert job["status"] == "completed", (
+            "回测本体成功：自动分析失败不应把 job 标为 failed"
+        )
+        assert job["run_id"] == "run_auto_fail"
+        assert job["error"]
+        assert "Backtest completed (run_id=run_auto_fail)" in job["error"]
+        assert "auto-analysis failed" in job["error"]
+        assert "boom-analysis" in job["error"]
 
 
 # ── T4: export html/pdf ───────────────────────────────────────────────────────

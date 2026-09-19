@@ -9,7 +9,7 @@ import json
 import logging
 import pathlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import polars as pl
@@ -44,10 +44,17 @@ class _ReconstructedSpec:
     AnalysisEngine only touches ``spec.prices`` inside the Brinson attribution
     block (guarded by try/except — skipped when prices are empty), so an empty
     prices frame is safe and keeps the analysis path dependency-free.
+
+    ``start_date``/``end_date`` back the WalkForwardRefit path (``use_refit=True``):
+    derived from the run's first/last portfolio snapshot dates — gold_backtest_runs
+    has no dedicated start/end date columns in the DDL, and snapshots always exist
+    (load_result raises earlier when they don't).
     """
 
     prices: pl.DataFrame = field(default_factory=pl.DataFrame)
     initial_cash: Decimal = Decimal("1_000_000")
+    start_date: "date | None" = None
+    end_date: "date | None" = None
 
 
 def _parse_ts(raw: str | None) -> datetime:
@@ -58,6 +65,15 @@ def _parse_ts(raw: str | None) -> datetime:
         except ValueError:
             pass
     return datetime.now(tz=timezone.utc)
+
+
+def _to_date(value) -> date:
+    """Coerce a trade_date cell (date | datetime | str) to datetime.date."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value)).date()
 
 
 def _load_or_compute_metrics(
@@ -140,7 +156,10 @@ def load_result(run_id: str, catalog: Catalog) -> BacktestResult:
         run_id=run_id,
         engine=engine,
         strategy_id=str(run_info.get("strategy_id") or ""),
-        spec=_ReconstructedSpec(),  # type: ignore[arg-type]
+        spec=_ReconstructedSpec(  # type: ignore[arg-type]
+            start_date=_to_date(ret_df["trade_date"].min()),
+            end_date=_to_date(ret_df["trade_date"].max()),
+        ),
         metrics=_load_or_compute_metrics(run_info, ret_df, fills_df.height),
         portfolio_returns=ret_df,
         net_returns=pl.DataFrame(),

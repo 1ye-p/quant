@@ -65,10 +65,14 @@ def init_qlib_with_quantdb(
         from cquant.datahub.catalog import Catalog
         from cquant.qlib_bridge import init_qlib_with_quantdb
 
-        # QuantDB source (default)
+        # QuantDB source (default). The catalog must stay open while Qlib
+        # reads from it — close it only when the Qlib session is done, so the
+        # DuckDB WAL gets checkpointed (Catalog.close()).
         catalog = Catalog("data/catalog.duckdb")
         catalog.initialize()
         init_qlib_with_quantdb(catalog)
+        # ... run Qlib workflows ...
+        catalog.close()  # checkpoint WAL on session end
 
         # Tushare source
         init_qlib_with_quantdb(data_source="tushare", tushare_token="your_token")

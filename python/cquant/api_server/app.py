@@ -115,11 +115,12 @@ async def _lifespan(app: FastAPI):
     # checkpoints and removes the .wal file on close. Never block exit, but
     # make failures visible.
     try:
-        from cquant.api_server.deps import _get_catalog, get_catalog
+        from cquant.api_server.deps import close_catalog
 
-        get_catalog().close()
-        _get_catalog.cache_clear()
-        logger.info("Catalog closed cleanly on shutdown (WAL checkpointed)")
+        if close_catalog():
+            logger.info("Catalog closed cleanly on shutdown (WAL checkpointed)")
+        else:
+            logger.debug("No catalog was created in this process; skipping close")
     except Exception as exc:
         logger.error("catalog close on shutdown failed: %s", exc)
 

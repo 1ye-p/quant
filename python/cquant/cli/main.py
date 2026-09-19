@@ -24,77 +24,77 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     """Handle 'ingest' command."""
     from cquant.datahub.ingest import MarketIngestionOrchestrator
 
-    catalog = Catalog(args.catalog)
+    with Catalog(args.catalog) as catalog:
 
-    if args.source == "tdx":
-        orchestrator = MarketIngestionOrchestrator(catalog, [])
-        version_id = orchestrator.ingest_bulk_tdx(
-            db_path=args.tdx_db,
-            start_date=date.fromisoformat(args.start),
-            end_date=date.fromisoformat(args.end),
-            chunk_days=args.chunk_days,
-        )
-        print(f"Ingestion complete: version_id={version_id}")
-    elif args.source in ("akshare", "tushare", "yfinance"):
-        import os
-        from cquant.core.enums import Frequency, Market
-        from cquant.datahub.ingest import IngestionSpec
-
-        if not args.symbols:
-            print(
-                f"Error: --symbols is required for --source {args.source}. "
-                "Example: --symbols 'SSE:600036,SSE:000001'",
-                file=sys.stderr,
+        if args.source == "tdx":
+            orchestrator = MarketIngestionOrchestrator(catalog, [])
+            version_id = orchestrator.ingest_bulk_tdx(
+                db_path=args.tdx_db,
+                start_date=date.fromisoformat(args.start),
+                end_date=date.fromisoformat(args.end),
+                chunk_days=args.chunk_days,
             )
+            print(f"Ingestion complete: version_id={version_id}")
+        elif args.source in ("akshare", "tushare", "yfinance"):
+            import os
+            from cquant.core.enums import Frequency, Market
+            from cquant.datahub.ingest import IngestionSpec
+
+            if not args.symbols:
+                print(
+                    f"Error: --symbols is required for --source {args.source}. "
+                    "Example: --symbols 'SSE:600036,SSE:000001'",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+
+            if args.source == "akshare":
+                from cquant.datahub.connectors.akshare_connector import AKShareConnector
+                connector = AKShareConnector()
+            elif args.source == "tushare":
+                from cquant.datahub.connectors.tushare_connector import TushareConnector
+                token = args.token or os.environ.get("TUSHARE_TOKEN", "")
+                connector = TushareConnector(token=token)
+            else:  # yfinance
+                from cquant.datahub.connectors.yfinance_connector import YFinanceConnector
+                connector = YFinanceConnector()
+
+            orchestrator = MarketIngestionOrchestrator(catalog, [connector])
+            spec = IngestionSpec(
+                market=Market.CN,
+                symbols=symbols,
+                start_date=date.fromisoformat(args.start),
+                end_date=date.fromisoformat(args.end),
+                frequency=Frequency.D1,
+            )
+            version_id = orchestrator.ingest(spec)
+            print(f"Ingestion complete: version_id={version_id}")
+        else:
+            print(f"Source '{args.source}' not yet supported", file=sys.stderr)
             sys.exit(1)
-
-        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-
-        if args.source == "akshare":
-            from cquant.datahub.connectors.akshare_connector import AKShareConnector
-            connector = AKShareConnector()
-        elif args.source == "tushare":
-            from cquant.datahub.connectors.tushare_connector import TushareConnector
-            token = args.token or os.environ.get("TUSHARE_TOKEN", "")
-            connector = TushareConnector(token=token)
-        else:  # yfinance
-            from cquant.datahub.connectors.yfinance_connector import YFinanceConnector
-            connector = YFinanceConnector()
-
-        orchestrator = MarketIngestionOrchestrator(catalog, [connector])
-        spec = IngestionSpec(
-            market=Market.CN,
-            symbols=symbols,
-            start_date=date.fromisoformat(args.start),
-            end_date=date.fromisoformat(args.end),
-            frequency=Frequency.D1,
-        )
-        version_id = orchestrator.ingest(spec)
-        print(f"Ingestion complete: version_id={version_id}")
-    else:
-        print(f"Source '{args.source}' not yet supported", file=sys.stderr)
-        sys.exit(1)
 
 
 def cmd_bootstrap(args: argparse.Namespace) -> None:
     """Handle 'bootstrap' command."""
     from cquant.datahub.bootstrap import bootstrap_assets_from_tdx, bootstrap_calendar_from_tdx
 
-    catalog = Catalog(args.catalog)
+    with Catalog(args.catalog) as catalog:
 
-    if args.target == "assets":
-        count = bootstrap_assets_from_tdx(catalog, args.tdx_db)
-        print(f"Bootstrapped {count} assets")
-    elif args.target == "calendar":
-        count = bootstrap_calendar_from_tdx(catalog, args.tdx_db)
-        print(f"Bootstrapped {count} calendar entries")
-    elif args.target == "all":
-        count_assets = bootstrap_assets_from_tdx(catalog, args.tdx_db)
-        count_calendar = bootstrap_calendar_from_tdx(catalog, args.tdx_db)
-        print(f"Bootstrapped {count_assets} assets, {count_calendar} calendar entries")
-    else:
-        print(f"Unknown target: {args.target}", file=sys.stderr)
-        sys.exit(1)
+        if args.target == "assets":
+            count = bootstrap_assets_from_tdx(catalog, args.tdx_db)
+            print(f"Bootstrapped {count} assets")
+        elif args.target == "calendar":
+            count = bootstrap_calendar_from_tdx(catalog, args.tdx_db)
+            print(f"Bootstrapped {count} calendar entries")
+        elif args.target == "all":
+            count_assets = bootstrap_assets_from_tdx(catalog, args.tdx_db)
+            count_calendar = bootstrap_calendar_from_tdx(catalog, args.tdx_db)
+            print(f"Bootstrapped {count_assets} assets, {count_calendar} calendar entries")
+        else:
+            print(f"Unknown target: {args.target}", file=sys.stderr)
+            sys.exit(1)
 
 
 def cmd_factors(args: argparse.Namespace) -> None:
@@ -103,33 +103,33 @@ def cmd_factors(args: argparse.Namespace) -> None:
     from cquant.factorlab.factors import BUILTIN_FACTORS
     from cquant.factorlab.materialize import FactorMaterializer, FactorMaterializationSpec
 
-    catalog = Catalog(args.catalog)
+    with Catalog(args.catalog) as catalog:
 
-    registry = FactorRegistry()
-    if args.all:
-        for factor in BUILTIN_FACTORS:
-            registry.register(factor)
-    else:
-        for name in args.factor_names:
+        registry = FactorRegistry()
+        if args.all:
             for factor in BUILTIN_FACTORS:
-                if factor.name == name:
-                    registry.register(factor)
-                    break
-            else:
-                print(f"Unknown factor: {name}", file=sys.stderr)
-                sys.exit(1)
+                registry.register(factor)
+        else:
+            for name in args.factor_names:
+                for factor in BUILTIN_FACTORS:
+                    if factor.name == name:
+                        registry.register(factor)
+                        break
+                else:
+                    print(f"Unknown factor: {name}", file=sys.stderr)
+                    sys.exit(1)
 
-    materializer = FactorMaterializer(catalog, registry)
-    spec = FactorMaterializationSpec(
-        dataset_version=args.dataset_version,
-        factor_names=registry.all_names(),
-        start_date=date.fromisoformat(args.start),
-        end_date=date.fromisoformat(args.end),
-    )
+        materializer = FactorMaterializer(catalog, registry)
+        spec = FactorMaterializationSpec(
+            dataset_version=args.dataset_version,
+            factor_names=registry.all_names(),
+            start_date=date.fromisoformat(args.start),
+            end_date=date.fromisoformat(args.end),
+        )
 
-    version_id = materializer.run(spec)
-    print(f"Factor materialization complete: version_id={version_id}")
-    print(f"Factors: {', '.join(registry.all_names())}")
+        version_id = materializer.run(spec)
+        print(f"Factor materialization complete: version_id={version_id}")
+        print(f"Factors: {', '.join(registry.all_names())}")
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
@@ -141,36 +141,36 @@ def cmd_backtest(args: argparse.Namespace) -> None:
 
     toml_defaults = get_backtest_defaults()
 
-    catalog = Catalog(args.catalog)
-    runner = BacktestRunner(catalog)
+    with Catalog(args.catalog) as catalog:
+        runner = BacktestRunner(catalog)
 
-    # initial_cash: 命令行 > TOML > 硬编码默认值 100 万
-    raw_cash = getattr(args, "initial_cash", None)
-    if raw_cash is not None:
-        initial_cash = Decimal(str(raw_cash))
-    else:
-        initial_cash = Decimal(str(toml_defaults.get("initial_cash", 1_000_000)))
+        # initial_cash: 命令行 > TOML > 硬编码默认值 100 万
+        raw_cash = getattr(args, "initial_cash", None)
+        if raw_cash is not None:
+            initial_cash = Decimal(str(raw_cash))
+        else:
+            initial_cash = Decimal(str(toml_defaults.get("initial_cash", 1_000_000)))
 
-    # benchmark: 命令行 > TOML > 空字符串
-    benchmark_asset_id = (
-        getattr(args, "benchmark", None)
-        or toml_defaults.get("benchmark", "")
-    )
+        # benchmark: 命令行 > TOML > 空字符串
+        benchmark_asset_id = (
+            getattr(args, "benchmark", None)
+            or toml_defaults.get("benchmark", "")
+        )
 
-    spec = BacktestRunSpec(
-        dataset_version=args.dataset_version,
-        strategy_id=args.strategy_id,
-        start_date=date.fromisoformat(args.start),
-        end_date=date.fromisoformat(args.end),
-        feature_set_version=args.feature_set_version or "",
-        top_n=args.top_n,
-        sort_factor=args.sort_factor,
-        initial_cash=initial_cash,
-        benchmark_asset_id=benchmark_asset_id,
-    )
+        spec = BacktestRunSpec(
+            dataset_version=args.dataset_version,
+            strategy_id=args.strategy_id,
+            start_date=date.fromisoformat(args.start),
+            end_date=date.fromisoformat(args.end),
+            feature_set_version=args.feature_set_version or "",
+            top_n=args.top_n,
+            sort_factor=args.sort_factor,
+            initial_cash=initial_cash,
+            benchmark_asset_id=benchmark_asset_id,
+        )
 
-    run_id = runner.run(spec)
-    print(f"Backtest complete: run_id={run_id}")
+        run_id = runner.run(spec)
+        print(f"Backtest complete: run_id={run_id}")
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
@@ -178,12 +178,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     from cquant.backtest_vector.engine import BacktestResult
     from cquant.bt_analyzer.run import AnalysisRunner, AnalysisRunSpec
 
-    catalog = Catalog(args.catalog)
+    with Catalog(args.catalog) as catalog:
 
-    # Load backtest result (simplified - in real usage, load from persisted data)
-    print("Analysis command requires a BacktestResult object")
-    print("Use the Python API directly for now")
-    sys.exit(1)
+        # Load backtest result (simplified - in real usage, load from persisted data)
+        print("Analysis command requires a BacktestResult object")
+        print("Use the Python API directly for now")
+        sys.exit(1)
 
 
 def cmd_tca(args: argparse.Namespace) -> None:
@@ -191,122 +191,122 @@ def cmd_tca(args: argparse.Namespace) -> None:
     from cquant.backtest_vector.tca import TransactionCostAnalyzer
     import polars as pl
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    # Get fills for the specified run
-    fills = catalog.query(
-        "SELECT trade_date, asset_id, side, qty, price, notional,"
-        " commission, stamp_duty, slippage, total_cost"
-        " FROM gold_fills"
-        " WHERE run_id = ?"
-        " ORDER BY trade_date",
-        [args.run_id],
-    )
+        # Get fills for the specified run
+        fills = catalog.query(
+            "SELECT trade_date, asset_id, side, qty, price, notional,"
+            " commission, stamp_duty, slippage, total_cost"
+            " FROM gold_fills"
+            " WHERE run_id = ?"
+            " ORDER BY trade_date",
+            [args.run_id],
+        )
 
-    if fills.is_empty():
-        print(f"No fills found for run_id={args.run_id}")
-        sys.exit(1)
+        if fills.is_empty():
+            print(f"No fills found for run_id={args.run_id}")
+            sys.exit(1)
 
-    analyzer = TransactionCostAnalyzer()
+        analyzer = TransactionCostAnalyzer()
 
-    if args.by_asset:
-        details = analyzer.analyze_by_asset(fills)
-        print(f"\nTCA by Asset (run_id={args.run_id}):\n")
-        print(f"{'Asset':<20} {'Turnover':>15} {'Cost':>15} {'Cost%':>8} {'Trades':>8}")
-        print(f"{'-'*20} {'-'*15} {'-'*15} {'-'*8} {'-'*8}")
-        for d in details[:args.top]:
-            print(f"{d.asset_id:<20} {d.turnover:>15,.2f} {d.total_cost:>15,.2f} {d.cost_pct:>7.4f}% {d.num_trades:>8,}")
-    elif args.by_date:
-        details = analyzer.analyze_by_date(fills)
-        print(f"\nTCA by Date (run_id={args.run_id}):\n")
-        print(f"{'Date':<12} {'Turnover':>15} {'Cost':>15} {'Cost%':>8} {'Trades':>8}")
-        print(f"{'-'*12} {'-'*15} {'-'*15} {'-'*8} {'-'*8}")
-        for d in details[:args.top]:
-            print(f"{d.trade_date:<12} {d.turnover:>15,.2f} {d.total_cost:>15,.2f} {d.cost_pct:>7.4f}% {d.num_trades:>8,}")
-    else:
-        report = analyzer.generate_report(fills)
-        print(report)
+        if args.by_asset:
+            details = analyzer.analyze_by_asset(fills)
+            print(f"\nTCA by Asset (run_id={args.run_id}):\n")
+            print(f"{'Asset':<20} {'Turnover':>15} {'Cost':>15} {'Cost%':>8} {'Trades':>8}")
+            print(f"{'-'*20} {'-'*15} {'-'*15} {'-'*8} {'-'*8}")
+            for d in details[:args.top]:
+                print(f"{d.asset_id:<20} {d.turnover:>15,.2f} {d.total_cost:>15,.2f} {d.cost_pct:>7.4f}% {d.num_trades:>8,}")
+        elif args.by_date:
+            details = analyzer.analyze_by_date(fills)
+            print(f"\nTCA by Date (run_id={args.run_id}):\n")
+            print(f"{'Date':<12} {'Turnover':>15} {'Cost':>15} {'Cost%':>8} {'Trades':>8}")
+            print(f"{'-'*12} {'-'*15} {'-'*15} {'-'*8} {'-'*8}")
+            for d in details[:args.top]:
+                print(f"{d.trade_date:<12} {d.turnover:>15,.2f} {d.total_cost:>15,.2f} {d.cost_pct:>7.4f}% {d.num_trades:>8,}")
+        else:
+            report = analyzer.generate_report(fills)
+            print(report)
 
 
 def cmd_positions(args: argparse.Namespace) -> None:
     """Handle 'positions' command."""
     import json
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    if args.run_id:
-        # Show positions for a specific run
-        snaps = catalog.query(
-            "SELECT trade_date, cash, nav, positions_count, gross_exposure, net_exposure"
-            " FROM gold_portfolio_snapshots"
-            " WHERE run_id = ?"
-            " ORDER BY trade_date DESC"
-            " LIMIT ?",
-            [args.run_id, args.limit],
-        )
-        if snaps.is_empty():
-            print(f"No snapshots found for run_id={args.run_id}")
-            sys.exit(1)
+        if args.run_id:
+            # Show positions for a specific run
+            snaps = catalog.query(
+                "SELECT trade_date, cash, nav, positions_count, gross_exposure, net_exposure"
+                " FROM gold_portfolio_snapshots"
+                " WHERE run_id = ?"
+                " ORDER BY trade_date DESC"
+                " LIMIT ?",
+                [args.run_id, args.limit],
+            )
+            if snaps.is_empty():
+                print(f"No snapshots found for run_id={args.run_id}")
+                sys.exit(1)
 
-        print(f"\nPortfolio Snapshots (run_id={args.run_id}):\n")
-        print(f"{'Date':<12} {'Cash':>15} {'NAV':>15} {'Positions':>10} {'Gross Exp':>15}")
-        print(f"{'-'*12} {'-'*15} {'-'*15} {'-'*10} {'-'*15}")
-        for row in snaps.iter_rows(named=True):
-            print(f"{str(row['trade_date']):<12} {row['cash']:>15,.2f} {row['nav']:>15,.2f} "
-                  f"{row['positions_count']:>10,} {row['gross_exposure']:>15,.2f}")
-    else:
-        # Show latest run
-        runs = catalog.query('''
-            SELECT run_id, strategy_id, started_at, status
-            FROM gold_backtest_runs
-            ORDER BY started_at DESC
-            LIMIT 5
-        ''')
-        print("\nRecent Backtest Runs:\n")
-        print(f"{'Run ID':<40} {'Strategy':<20} {'Started':<20} {'Status':<10}")
-        print(f"{'-'*40} {'-'*20} {'-'*20} {'-'*10}")
-        for row in runs.iter_rows(named=True):
-            print(f"{row['run_id']:<40} {row['strategy_id']:<20} "
-                  f"{str(row['started_at']):<20} {row['status']:<10}")
+            print(f"\nPortfolio Snapshots (run_id={args.run_id}):\n")
+            print(f"{'Date':<12} {'Cash':>15} {'NAV':>15} {'Positions':>10} {'Gross Exp':>15}")
+            print(f"{'-'*12} {'-'*15} {'-'*15} {'-'*10} {'-'*15}")
+            for row in snaps.iter_rows(named=True):
+                print(f"{str(row['trade_date']):<12} {row['cash']:>15,.2f} {row['nav']:>15,.2f} "
+                      f"{row['positions_count']:>10,} {row['gross_exposure']:>15,.2f}")
+        else:
+            # Show latest run
+            runs = catalog.query('''
+                SELECT run_id, strategy_id, started_at, status
+                FROM gold_backtest_runs
+                ORDER BY started_at DESC
+                LIMIT 5
+            ''')
+            print("\nRecent Backtest Runs:\n")
+            print(f"{'Run ID':<40} {'Strategy':<20} {'Started':<20} {'Status':<10}")
+            print(f"{'-'*40} {'-'*20} {'-'*20} {'-'*10}")
+            for row in runs.iter_rows(named=True):
+                print(f"{row['run_id']:<40} {row['strategy_id']:<20} "
+                      f"{str(row['started_at']):<20} {row['status']:<10}")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Handle 'status' command."""
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    print("=== cQuant Status ===\n")
+        print("=== cQuant Status ===\n")
 
-    # Silver layer
-    assets_df = catalog.query("SELECT COUNT(*) AS cnt FROM silver_prices_1d")
-    print(f"Silver prices: {assets_df['cnt'][0]:,} rows")
+        # Silver layer
+        assets_df = catalog.query("SELECT COUNT(*) AS cnt FROM silver_prices_1d")
+        print(f"Silver prices: {assets_df['cnt'][0]:,} rows")
 
-    asset_count_df = catalog.query("SELECT COUNT(DISTINCT asset_id) AS cnt FROM silver_prices_1d")
-    print(f"Assets: {asset_count_df['cnt'][0]:,}")
+        asset_count_df = catalog.query("SELECT COUNT(DISTINCT asset_id) AS cnt FROM silver_prices_1d")
+        print(f"Assets: {asset_count_df['cnt'][0]:,}")
 
-    date_range_df = catalog.query("SELECT MIN(trade_date) AS min_d, MAX(trade_date) AS max_d FROM silver_prices_1d")
-    print(f"Date range: {date_range_df['min_d'][0]} to {date_range_df['max_d'][0]}\n")
+        date_range_df = catalog.query("SELECT MIN(trade_date) AS min_d, MAX(trade_date) AS max_d FROM silver_prices_1d")
+        print(f"Date range: {date_range_df['min_d'][0]} to {date_range_df['max_d'][0]}\n")
 
-    # Gold layer
-    factors_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_factor_values")
-    print(f"Factor values: {factors_df['cnt'][0]:,}")
+        # Gold layer
+        factors_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_factor_values")
+        print(f"Factor values: {factors_df['cnt'][0]:,}")
 
-    factor_names_df = catalog.query("SELECT COUNT(DISTINCT factor_name) AS cnt FROM gold_factor_values")
-    print(f"Unique factors: {factor_names_df['cnt'][0]}")
+        factor_names_df = catalog.query("SELECT COUNT(DISTINCT factor_name) AS cnt FROM gold_factor_values")
+        print(f"Unique factors: {factor_names_df['cnt'][0]}")
 
-    backtests_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_backtest_runs")
-    print(f"Backtest runs: {backtests_df['cnt'][0]}")
+        backtests_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_backtest_runs")
+        print(f"Backtest runs: {backtests_df['cnt'][0]}")
 
-    analyses_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_bt_analysis_runs")
-    print(f"Analysis runs: {analyses_df['cnt'][0]}\n")
+        analyses_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_bt_analysis_runs")
+        print(f"Analysis runs: {analyses_df['cnt'][0]}\n")
 
-    # Available factors
-    factor_list_df = catalog.query("SELECT DISTINCT factor_name FROM gold_factor_values ORDER BY factor_name")
-    print("Available factors:")
-    for row in factor_list_df.iter_rows(named=True):
-        print(f"  - {row['factor_name']}")
+        # Available factors
+        factor_list_df = catalog.query("SELECT DISTINCT factor_name FROM gold_factor_values ORDER BY factor_name")
+        print("Available factors:")
+        for row in factor_list_df.iter_rows(named=True):
+            print(f"  - {row['factor_name']}")
 
 
 def cmd_quote(args: argparse.Namespace) -> None:
@@ -377,32 +377,32 @@ def cmd_live_start(args: argparse.Namespace) -> None:
     """Handle 'live start' command."""
     from cquant.execution.live_executor import LiveExecutor
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    executor = LiveExecutor(
-        catalog,
-        lot_size=args.lot_size,
-        min_strength=args.min_strength,
-        max_position_pct=args.max_position_pct,
-    )
+        executor = LiveExecutor(
+            catalog,
+            lot_size=args.lot_size,
+            min_strength=args.min_strength,
+            max_position_pct=args.max_position_pct,
+        )
 
-    if args.once:
-        # Run once
-        print("Running live execution (once)...")
-        summary = executor.run_once()
-        print(f"\n=== Execution Summary ({summary['date']}) ===")
-        print(f"  Executed: {summary['executed']}")
-        print(f"  Skipped:  {summary['skipped']}")
-        if summary["errors"]:
-            print(f"  Errors:   {len(summary['errors'])}")
-            for err in summary["errors"]:
-                print(f"    - {err}")
-    else:
-        # Start scheduler
-        print(f"Starting live executor scheduler (daily at {args.hour:02d}:{args.minute:02d})...")
-        print("Press Ctrl+C to stop.\n")
-        executor.start_scheduler(hour=args.hour, minute=args.minute)
+        if args.once:
+            # Run once
+            print("Running live execution (once)...")
+            summary = executor.run_once()
+            print(f"\n=== Execution Summary ({summary['date']}) ===")
+            print(f"  Executed: {summary['executed']}")
+            print(f"  Skipped:  {summary['skipped']}")
+            if summary["errors"]:
+                print(f"  Errors:   {len(summary['errors'])}")
+                for err in summary["errors"]:
+                    print(f"    - {err}")
+        else:
+            # Start scheduler
+            print(f"Starting live executor scheduler (daily at {args.hour:02d}:{args.minute:02d})...")
+            print("Press Ctrl+C to stop.\n")
+            executor.start_scheduler(hour=args.hour, minute=args.minute)
 
 
 def cmd_trade_account(args: argparse.Namespace) -> None:
@@ -557,48 +557,48 @@ def cmd_scheduler_start(args: argparse.Namespace) -> None:
     """Handle 'scheduler start' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    scheduler = DataScheduler(catalog)
-    print("Starting data scheduler (Ctrl+C to stop)...")
-    scheduler.start()
+        scheduler = DataScheduler(catalog)
+        print("Starting data scheduler (Ctrl+C to stop)...")
+        scheduler.start()
 
 
 def cmd_scheduler_status(args: argparse.Namespace) -> None:
     """Handle 'scheduler status' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    scheduler = DataScheduler(catalog)
-    info = scheduler.status()
+        scheduler = DataScheduler(catalog)
+        info = scheduler.status()
 
-    print("=== Data Scheduler Status ===\n")
-    print(f"  Running:   {info['running']}")
-    print(f"  Timezone:  {info['timezone']}")
-    if info["jobs"]:
-        print("\n  Registered Jobs:")
-        print(f"  {'ID':<20} {'Name':<25} {'Next Run':<25}")
-        print(f"  {'-'*20} {'-'*25} {'-'*25}")
-        for job in info["jobs"]:
-            print(f"  {job['id']:<20} {job['name']:<25} {job['next_run'] or 'N/A':<25}")
-    else:
-        print("\n  No jobs registered (scheduler not started)")
+        print("=== Data Scheduler Status ===\n")
+        print(f"  Running:   {info['running']}")
+        print(f"  Timezone:  {info['timezone']}")
+        if info["jobs"]:
+            print("\n  Registered Jobs:")
+            print(f"  {'ID':<20} {'Name':<25} {'Next Run':<25}")
+            print(f"  {'-'*20} {'-'*25} {'-'*25}")
+            for job in info["jobs"]:
+                print(f"  {job['id']:<20} {job['name']:<25} {job['next_run'] or 'N/A':<25}")
+        else:
+            print("\n  No jobs registered (scheduler not started)")
 
 
 def cmd_scheduler_run(args: argparse.Namespace) -> None:
     """Handle 'scheduler run <task>' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    catalog = Catalog(args.catalog)
-    catalog.initialize()
+    with Catalog(args.catalog) as catalog:
+        catalog.initialize()
 
-    scheduler = DataScheduler(catalog)
-    print(f"Running task: {args.task}")
-    scheduler.run_task(args.task)
-    print(f"Task '{args.task}' completed")
+        scheduler = DataScheduler(catalog)
+        print(f"Running task: {args.task}")
+        scheduler.run_task(args.task)
+        print(f"Task '{args.task}' completed")
 
 
 def build_parser() -> argparse.ArgumentParser:

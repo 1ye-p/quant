@@ -224,6 +224,35 @@ def get_catalog() -> Catalog:
     return _get_catalog()
 
 
+def reset_catalog() -> None:
+    """Drop the cached Catalog so the next ``get_catalog()`` creates a fresh one.
+
+    Does NOT close the underlying connection — pair with ``close_catalog()``
+    when the caller owns the lifecycle (e.g. app shutdown).
+    """
+    _get_catalog.cache_clear()
+
+
+def close_catalog() -> bool:
+    """Close the cached catalog if one was ever created; clear the cache.
+
+    Probes the lru_cache so a shutdown path never *creates* a connection just
+    to close it (which would also run DDL via ``initialize()``).
+
+    Returns
+    -------
+    bool
+        True if a catalog existed and was closed (WAL checkpointed), False if
+        no catalog had been created in this process.
+    """
+    if _get_catalog.cache_info().currsize == 0:
+        return False
+    catalog = _get_catalog()
+    catalog.close()
+    reset_catalog()
+    return True
+
+
 def get_kb_service() -> KnowledgeBaseService:
     return _get_kb_service()
 

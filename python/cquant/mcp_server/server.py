@@ -37,12 +37,15 @@ def query_backtest_result(run_id: str) -> str:
     """
     try:
         catalog = _get_catalog()
-        df = catalog.query(
-            "SELECT run_id, engine, strategy_id, dataset_version, "
-            "started_at, completed_at, status, metrics_uri, error_message "
-            "FROM gold_backtest_runs WHERE run_id = ? LIMIT 1",
-            [run_id],
-        )
+        try:
+            df = catalog.query(
+                "SELECT run_id, engine, strategy_id, dataset_version, "
+                "started_at, completed_at, status, metrics_uri, error_message "
+                "FROM gold_backtest_runs WHERE run_id = ? LIMIT 1",
+                [run_id],
+            )
+        finally:
+            catalog.close()
     except Exception as exc:
         return json.dumps({"error": f"Database error: {exc}"})
 
@@ -63,24 +66,27 @@ def query_factor_ic(factor_name: str, feature_set_version: str = "") -> str:
     """
     try:
         catalog = _get_catalog()
-        if feature_set_version:
-            df = catalog.query(
-                "SELECT job_id, factor_name, feature_set_version, status, "
-                "summary_json, created_at "
-                "FROM meta_factor_analytics "
-                "WHERE factor_name = ? AND feature_set_version = ? "
-                "ORDER BY created_at DESC LIMIT 1",
-                [factor_name, feature_set_version],
-            )
-        else:
-            df = catalog.query(
-                "SELECT job_id, factor_name, feature_set_version, status, "
-                "summary_json, created_at "
-                "FROM meta_factor_analytics "
-                "WHERE factor_name = ? "
-                "ORDER BY created_at DESC LIMIT 1",
-                [factor_name],
-            )
+        try:
+            if feature_set_version:
+                df = catalog.query(
+                    "SELECT job_id, factor_name, feature_set_version, status, "
+                    "summary_json, created_at "
+                    "FROM meta_factor_analytics "
+                    "WHERE factor_name = ? AND feature_set_version = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    [factor_name, feature_set_version],
+                )
+            else:
+                df = catalog.query(
+                    "SELECT job_id, factor_name, feature_set_version, status, "
+                    "summary_json, created_at "
+                    "FROM meta_factor_analytics "
+                    "WHERE factor_name = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    [factor_name],
+                )
+        finally:
+            catalog.close()
     except Exception as exc:
         return json.dumps({"error": f"Database error: {exc}"})
 
@@ -109,22 +115,25 @@ def query_risk_snapshot(run_id: str = "", strategy_id: str = "") -> str:
 
     try:
         catalog = _get_catalog()
-        if run_id:
-            df = catalog.query(
-                "SELECT run_id, snapshot_ts, strategy_id, gross_leverage, net_leverage, "
-                "beta, drawdown, var_95, cvar_95 "
-                "FROM gold_risk_snapshots WHERE run_id = ? "
-                "ORDER BY snapshot_ts DESC LIMIT 1",
-                [run_id],
-            )
-        else:
-            df = catalog.query(
-                "SELECT run_id, snapshot_ts, strategy_id, gross_leverage, net_leverage, "
-                "beta, drawdown, var_95, cvar_95 "
-                "FROM gold_risk_snapshots WHERE strategy_id = ? "
-                "ORDER BY snapshot_ts DESC LIMIT 1",
-                [strategy_id],
-            )
+        try:
+            if run_id:
+                df = catalog.query(
+                    "SELECT run_id, snapshot_ts, strategy_id, gross_leverage, net_leverage, "
+                    "beta, drawdown, var_95, cvar_95 "
+                    "FROM gold_risk_snapshots WHERE run_id = ? "
+                    "ORDER BY snapshot_ts DESC LIMIT 1",
+                    [run_id],
+                )
+            else:
+                df = catalog.query(
+                    "SELECT run_id, snapshot_ts, strategy_id, gross_leverage, net_leverage, "
+                    "beta, drawdown, var_95, cvar_95 "
+                    "FROM gold_risk_snapshots WHERE strategy_id = ? "
+                    "ORDER BY snapshot_ts DESC LIMIT 1",
+                    [strategy_id],
+                )
+        finally:
+            catalog.close()
     except Exception as exc:
         return json.dumps({"error": f"Database error: {exc}"})
 

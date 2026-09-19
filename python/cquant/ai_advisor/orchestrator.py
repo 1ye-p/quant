@@ -54,6 +54,7 @@ class AdvisorOrchestrator:
         self._kb = kb_service
         self._safety = safety
         self._rag = rag or RAGContext()
+        self._owns_catalog = catalog is None
         self._catalog = catalog or Catalog(settings.db_path)
         self._catalog.initialize()
         self._tool_registry = {t.name: t for t in tools}
@@ -75,6 +76,17 @@ class AdvisorOrchestrator:
         )
         self._router = IntentRouter()
         self._check_required_agents()
+
+    def close(self) -> None:
+        """Close owned resources.
+
+        Closes the catalog DuckDB connection (WAL governance: DuckDB
+        checkpoints and removes the .wal file on clean close) — but only when
+        this orchestrator created it. A caller-supplied catalog (e.g. the API
+        server's shared ``CatalogDep``) remains the caller's responsibility.
+        """
+        if self._owns_catalog:
+            self._catalog.close()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

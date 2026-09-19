@@ -141,3 +141,18 @@ CREATE TABLE IF NOT EXISTS silver_valuation_daily (
 
 CREATE INDEX IF NOT EXISTS idx_silver_valuation_daily_date
     ON silver_valuation_daily (trade_date);
+
+-- ── External indicators (D1-A: market-level rows use '__MARKET__' sentinel) ──
+CREATE TABLE IF NOT EXISTS silver_external_indicators (
+    source          VARCHAR NOT NULL,
+    indicator_key   VARCHAR NOT NULL,
+    asset_id        VARCHAR NOT NULL DEFAULT '__MARKET__',
+    trade_date      DATE NOT NULL,
+    value           DOUBLE,
+    available_date  DATE NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source, indicator_key, asset_id, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ext_ind_date
+    ON silver_external_indicators (indicator_key, trade_date);

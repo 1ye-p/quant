@@ -637,3 +637,73 @@ async def get_anomalies(version_id: str, catalog: CatalogDep, limit: int = 20) -
                     "change_pct": round(change * 100, 2),
                 })
     return {"items": anomalies[:limit]}
+
+
+# ── External indicators (CSV import, D1-A __MARKET__ sentinel) ───────────────
+
+import json
+import tempfile
+from pathlib import Path
+
+from fastapi import File, Form, UploadFile
+
+from cquant.datahub.pipelines.external_indicator_importer import (
+    ExternalIndicatorImporter,
+    ImportConfig,
+    preview_csv,
+)
+
+
+async def _save_upload(file: UploadFile) -> Path:
+    suffix = Path(file.filename or "upload.csv").suffix or ".csv"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ext_ind_")
+    content = await file.read()
+    tmp.write(content)
+    tmp.close()
+    return Path(tmp.name)
+
+
+@router.post("/external-indicators/preview")
+async def preview_external_indicators_csv(file: UploadFile = File(...)) -> dict:
+    """上传 CSV 预览：返回列名与前 10 行，供导入向导做列映射。"""
+    path = await _save_upload(file)
+    try:
+        return preview_csv(path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"CSV 解析失败：{exc}") from exc
+
+
+@router.post("/external-indicators/import")
+async def import_external_indicators(
+    catalog: CatalogDep,
+    file: UploadFile = File(...),
+    config: str = Form(...),
+) -> dict:
+    """导入外部指标 CSV 到 silver_external_indicators。
+
+    config JSON: {source, indicator_key, column_map: {csv_col: schema_col},
+    available_date_rule: 'A'|'B'}（默认 B=次日可查，保守 PIT）。
+    """
+    try:
+        cfg_dict = json.loads(config)
+        cfg = ImportConfig(
+            source=str(cfg_dict["source"]),
+            indicator_key=str(cfg_dict["indicator_key"]),
+            column_map=dict(cfg_dict["column_map"]),
+            available_date_rule=str(cfg_dict.get("available_date_rule", "B")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"config JSON 非法（需 source/indicator_key/column_map）：{exc}",
+        ) from exc
+
+    path = await _save_upload(file)
+    try:
+        importer = ExternalIndicatorImporter(catalog)
+        report = importer.import_csv(path, cfg)
+        return report.as_dict()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"导入失败：{exc}") from exc

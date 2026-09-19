@@ -2688,6 +2688,49 @@
       },
       "detail": {
         "select_prompt": "Please select a dataset version on the left"
+      },
+      "ext_ind": {
+        "link_open": "External Indicators Import",
+        "back": "Back to Datasets",
+        "title": "External Indicators Import",
+        "subtitle": "Import market-level / per-stock external indicator CSVs into silver_external_indicators with PIT availability control",
+        "step": {
+          "file": "Select CSV file",
+          "mapping": "Source & column mapping"
+        },
+        "file": {
+          "choose": "Choose CSV file",
+          "row_count": "Total rows"
+        },
+        "config": {
+          "source": "Source",
+          "indicator_key": "Indicator key (lowercase/digits/underscore)"
+        },
+        "mapping": {
+          "trade_date": "Trade date column",
+          "value": "Value column",
+          "asset_id": "Asset code column (optional)",
+          "none": "(unmapped → __MARKET__)",
+          "select": "Select a column",
+          "asset_hint": "Accepts 600000.SH / sh600000 / 600000; leave empty for market-level"
+        },
+        "pit": {
+          "question": "When does this indicator become available? (PIT question — prevents look-ahead bias)",
+          "a": "Available after market close same day (available_date = trade date)",
+          "b": "Available the next day (available_date = next trading day)",
+          "c": "Not sure",
+          "c_hint": "Defaults to B: at most one day of staleness — never cheats with future data"
+        },
+        "btn": {
+          "import": "Import"
+        },
+        "report": {
+          "title": "Import report",
+          "total": "Total",
+          "inserted": "Inserted",
+          "deduped": "Deduped/updated",
+          "skipped": "Skipped"
+        }
       }
     },
     "backtests_list": {

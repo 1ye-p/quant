@@ -12,6 +12,7 @@ const named = <T extends Record<string, unknown>>(
 
 const OverviewPage  = named(() => import('@/pages/OverviewPage'), 'OverviewPage')
 const DatasetsPage  = named(() => import('@/pages/DatasetsPage'), 'DatasetsPage')
+const ExternalIndicatorsImportPage = named(() => import('@/pages/ExternalIndicatorsImport'), 'ExternalIndicatorsImportPage')
 const BacktestsListPage = named(() => import('@/pages/BacktestsListPage'), 'BacktestsListPage')
 const BacktestDetailPage = named(() => import('@/pages/BacktestDetailPage'), 'BacktestDetailPage')
 const BacktestComparePage = named(() => import('@/pages/BacktestComparePage'), 'BacktestComparePage')
@@ -89,6 +90,7 @@ export const router = createBrowserRouter([
       { path: 'optimize',   element: <OptimizePage /> },
       { path: 'risk',       element: <RiskPage /> },
       { path: 'scoring',    element: <ScoringPage /> },
+      { path: 'datasets/external-indicators', element: <ExternalIndicatorsImportPage /> },
       { path: 'datasets',   element: <DatasetsPage /> },
       { path: 'knowledge',  element: <KnowledgePage /> },
       { path: 'advisor',    element: <AdvisorPage /> },

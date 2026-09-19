@@ -2,7 +2,7 @@
  * cQuant API — Datasets domain.
  */
 
-import { api, type RequestConfig } from './client'
+import { api, request, type RequestConfig } from './client'
 
 // ── Types (not yet in types/) ────────────────────────────────────────────────
 
@@ -20,6 +20,14 @@ export interface DatasetVersion {
 }
 
 // ── API ────────────────────────────────────────────────────────────────────
+
+
+function extIndForm(file: File, config?: ExtIndImportConfig): FormData {
+  const form = new FormData()
+  form.append('file', file)
+  if (config) form.append('config', JSON.stringify(config))
+  return form
+}
 
 export const datasetsApi = {
   list: (limit = 50, config?: RequestConfig) =>
@@ -141,4 +149,46 @@ export const datasetsApi = {
         change: { mean_diff: number; mean_pct_change: number }
       }[]
     }>(`/datasets/compare?version_a=${encodeURIComponent(versionA)}&version_b=${encodeURIComponent(versionB)}`, config),
+
+  previewExternalIndicators: (file: File, config?: RequestConfig) =>
+    request<ExtIndPreview>('/datasets/external-indicators/preview', {
+      method: 'POST',
+      body: extIndForm(file) as unknown as BodyInit,
+      headers: {},
+      ...config,
+    }),
+
+  importExternalIndicators: (file: File, config: ExtIndImportConfig, reqConfig?: RequestConfig) =>
+    request<ExtIndImportReport>('/datasets/external-indicators/import', {
+      method: 'POST',
+      body: extIndForm(file, config) as unknown as BodyInit,
+      headers: {},
+      ...reqConfig,
+    }),
+}
+
+
+// ── External indicators CSV import ──────────────────────────────────────────
+
+export interface ExtIndPreview {
+  columns: string[]
+  rows: Record<string, string | number | null>[]
+  total_rows: number
+}
+
+export interface ExtIndImportReport {
+  total: number
+  inserted: number
+  deduped: number
+  skipped: number
+  skipped_reasons: string[]
+  warnings: string[]
+}
+
+export interface ExtIndImportConfig {
+  source: string
+  indicator_key: string
+  column_map: Record<string, string>
+  /** A = available on trade_date, B = next trading day (conservative default) */
+  available_date_rule: 'A' | 'B'
 }

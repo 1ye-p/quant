@@ -2688,6 +2688,49 @@
       },
       "detail": {
         "select_prompt": "请在左侧选择一个数据集版本"
+      },
+      "ext_ind": {
+        "link_open": "外部指标导入",
+        "back": "返回数据集",
+        "title": "外部指标导入",
+        "subtitle": "将市场级/个股外部指标 CSV 导入 silver_external_indicators，带 PIT 发布日控制",
+        "step": {
+          "file": "选择 CSV 文件",
+          "mapping": "来源与列映射"
+        },
+        "file": {
+          "choose": "选择 CSV 文件",
+          "row_count": "总行数"
+        },
+        "config": {
+          "source": "数据来源 (source)",
+          "indicator_key": "指标键 (indicator_key，小写字母/数字/下划线)"
+        },
+        "mapping": {
+          "trade_date": "交易日期列",
+          "value": "数值列",
+          "asset_id": "代码列（可选）",
+          "none": "（不映射 → __MARKET__ 市场级）",
+          "select": "请选择列",
+          "asset_hint": "支持 600000.SH / sh600000 / 600000 三种格式，留空视为市场级指标"
+        },
+        "pit": {
+          "question": "该指标何时可查？（PIT 时点问题，防止未来数据泄露）",
+          "a": "当天盘后即可查询（available_date = 交易日）",
+          "b": "次日才可查询（available_date = 下一交易日）",
+          "c": "不确定",
+          "c_hint": "不确定时默认按 B 处理：保守最多损失一天时效，永不作弊（不引入未来数据）"
+        },
+        "btn": {
+          "import": "执行导入"
+        },
+        "report": {
+          "title": "导入结果",
+          "total": "总行数",
+          "inserted": "新写入",
+          "deduped": "去重/更新",
+          "skipped": "跳过"
+        }
       }
     },
     "backtests_list": {

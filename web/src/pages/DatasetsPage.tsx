@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { datasetsApi } from '@/lib/api'
@@ -218,6 +219,11 @@ export function DatasetsPage() {
       <div>
         <h1 className="page-title">{t('page.datasets.title')}</h1>
         <p className="page-subtitle">{t('page.datasets.subtitle', { count: data?.total ?? 0 })}</p>
+      </div>
+      <div className="flex justify-end">
+        <Link to="/datasets/external-indicators" className="btn-secondary text-xs">
+          {t('page.datasets.ext_ind.link_open')}
+        </Link>
       </div>
 
       {/* Schedule status bar */}

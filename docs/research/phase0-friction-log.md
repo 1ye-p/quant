@@ -205,3 +205,17 @@
 **裁剪说明**（按 Phase 1 校准建议 #2）：完整版"图表复权切换"（前/后复权一键切换）后移，不阻塞 1-8 闭环判定——研究员现在能"查到"每只股票的除权事件 + "知道"口径是什么，最小闭环达成。
 
 **级别变更**：1-8 🔴 → ✅（最小版；复权切换 UI 留作增强项，不再单列摩擦）。
+
+---
+
+## 处置结论：摩擦 1-3/1-4/1-5/1-6/1-8（Phase 1 数据地基层）已闭环 ✅
+
+**修复**（2026-09-19，commits `99b12e8` + `ed018f9` + `bddf3de` + `afd24b8` + `7820760`）：
+1. **1-6 PIT universe**：universe.py 表名 silver_stock_info→silver_assets（原表全库不存在）——/universe/pit 与 /stats 返回真实 list/delist 数据（6675 资产验证）。
+2. **1-3/2-1c 股票池清洗**：universe/质量/覆盖/异常端点默认 `NOT LIKE '%:88%'` 剔除 1116 只 SSE:880/881 板块指数（实测零误伤真实股票）；include_indices 可显式包含。
+3. **1-4/1-5 质量报告**：锚定 CURRENT_DATE→max(trade_date)（stale 数据不再恒零）；白名单换真实表；scorer 失败显式 QualityQueryError（含表名）非全零假报告。
+4. **1-8 corporate_actions 最小版**：GET /datasets/corporate-actions per-asset 查询 + backtest.md §4.1 复权口径披露（前复权、分红因子平滑非现金再投资）；完整复权切换后移（C4）。
+5. **新增交付**：silver_external_indicators（__MARKET__ 哨兵）+ CSV 导入器（归一/日历/available_date 保守默认 B）+ 导入向导（PIT 三问）+ PIT loader + **数据浏览器**（白名单结构化查询 + 覆盖区间×股票池第一用例）+ 退市端到端验证文档（mark-to-zero 语义如实记录）。
+6. **P2-1/P2-2（HARDENING）**：前次已交付（24be3fd/d0b2913），本 Phase 核验跳过。
+
+**级别变更**：1-3 🟠→✅、1-4 🟠→✅、1-5 🔴→✅、1-6 🔴→✅、1-8 🔴→✅。

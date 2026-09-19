@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+import pathlib
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
+
+import polars as pl
 
 from cquant.backtest_vector.engine import BacktestResult
 from cquant.bt_analyzer.engine import AnalysisEngine
@@ -33,15 +37,130 @@ class AnalysisRunSpec:
     alpha: float = 0.05
 
 
+@dataclass
+class _ReconstructedSpec:
+    """Minimal stand-in for BacktestSpec when rebuilding a result from gold tables.
+
+    AnalysisEngine only touches ``spec.prices`` inside the Brinson attribution
+    block (guarded by try/except — skipped when prices are empty), so an empty
+    prices frame is safe and keeps the analysis path dependency-free.
+    """
+
+    prices: pl.DataFrame = field(default_factory=pl.DataFrame)
+    initial_cash: Decimal = Decimal("1_000_000")
+
+
+def _parse_ts(raw: str | None) -> datetime:
+    """Parse an ISO timestamp from gold_backtest_runs; fallback to now(UTC)."""
+    if raw:
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError:
+            pass
+    return datetime.now(tz=timezone.utc)
+
+
+def _load_or_compute_metrics(
+    run_info: dict, ret_df: pl.DataFrame, n_fills: int
+) -> "BacktestMetrics":
+    """Load metrics from the run's JSON artifact, or recompute from returns."""
+    from cquant.backtest_vector.metrics import BacktestMetrics, compute_metrics
+
+    uri = run_info.get("metrics_uri") or ""
+    if uri:
+        try:
+            data = json.loads(pathlib.Path(uri).read_text())
+            if isinstance(data, dict):
+                valid = {f: data[f] for f in BacktestMetrics._fields if f in data}
+                if "sharpe_ratio" in valid:
+                    return BacktestMetrics(**valid)
+        except Exception as exc:
+            logger.debug("Could not read metrics artifact %s: %s", uri, exc)
+
+    returns = ret_df.get_column("portfolio_return").fill_null(0.0)
+    return compute_metrics(returns, total_fills=n_fills or None)
+
+
+def load_result(run_id: str, catalog: Catalog) -> BacktestResult:
+    """Reconstruct a minimal ``BacktestResult`` from persisted gold tables.
+
+    Sources:
+    - ``gold_backtest_runs``       → run metadata + metrics_uri artifact
+    - ``gold_portfolio_snapshots`` → portfolio_returns [trade_date, portfolio_return, nav]
+    - ``gold_fills``               → fills for TCA
+    - ``gold_signals``             → positions for Brinson (best effort)
+
+    Raises ValueError with a human-readable reason when the artifacts needed
+    for analysis are missing (e.g. no portfolio snapshots persisted).
+    """
+    from cquant.core.enums import EngineType
+
+    run_df = catalog.query(
+        "SELECT run_id, engine, strategy_id, metrics_uri, started_at, completed_at "
+        "FROM gold_backtest_runs WHERE run_id = ?",
+        [run_id],
+    )
+    if run_df.is_empty():
+        raise ValueError(f"Backtest run '{run_id}' not found in gold_backtest_runs")
+    run_info = run_df.to_dicts()[0]
+
+    ret_df = catalog.query(
+        "SELECT trade_date, portfolio_return, nav FROM gold_portfolio_snapshots "
+        "WHERE run_id = ? ORDER BY trade_date",
+        [run_id],
+    )
+    if ret_df.is_empty():
+        raise ValueError(
+            f"No portfolio snapshots persisted for run '{run_id}' — cannot analyze"
+        )
+
+    fills_df = catalog.query(
+        "SELECT trade_date, asset_id, side, qty, price, notional, commission, "
+        "stamp_duty, slippage, total_cost FROM gold_fills "
+        "WHERE run_id = ? ORDER BY trade_date",
+        [run_id],
+    )
+
+    positions_df = pl.DataFrame()
+    try:
+        positions_df = catalog.query(
+            "SELECT trade_date, asset_id, target_weight FROM gold_signals "
+            "WHERE signal_set_version = ?",
+            [run_id],
+        )
+    except Exception as exc:
+        logger.debug("gold_signals unavailable for run %s: %s", run_id, exc)
+
+    try:
+        engine = EngineType(str(run_info.get("engine") or "vector"))
+    except ValueError:
+        engine = EngineType.VECTOR
+
+    return BacktestResult(
+        run_id=run_id,
+        engine=engine,
+        strategy_id=str(run_info.get("strategy_id") or ""),
+        spec=_ReconstructedSpec(),  # type: ignore[arg-type]
+        metrics=_load_or_compute_metrics(run_info, ret_df, fills_df.height),
+        portfolio_returns=ret_df,
+        net_returns=pl.DataFrame(),
+        positions=positions_df,
+        fills=fills_df,
+        started_at=_parse_ts(run_info.get("started_at")),
+        completed_at=_parse_ts(run_info.get("completed_at")),
+    )
+
+
 class AnalysisRunner:
     """Run backtest robustness analysis and persist results.
 
     Usage::
 
         runner = AnalysisRunner(catalog)
-        report = runner.run(backtest_result, AnalysisRunSpec(
-            backtest_run_id="...",
-        ))
+        report = runner.run(
+            load_result(run_id, catalog),
+            AnalysisRunSpec(backtest_run_id=run_id),
+        )
     """
 
     def __init__(self, catalog: Catalog) -> None:

@@ -1009,7 +1009,9 @@
         "html": "Export HTML",
         "pdf": "Export PDF",
         "failed": "Export failed",
-        "pdf_failed": "PDF export failed"
+        "pdf_failed": "PDF export failed",
+        "pdf_note": "PDF export is unavailable (weasyprint system library missing); use the HTML report or the Markdown research report instead",
+        "pdf_unavailable": "unavailable"
       },
       "deploy": {
         "modal_title": "Deploy as Paper Strategy",

@@ -573,12 +573,26 @@ async def create_backtest(
             _save_job(catalog, job_id, "backtest", "completed", run_id=run_id)
             # Auto-trigger overfitting analysis after successful backtest
             try:
-                from cquant.bt_analyzer.run import AnalysisRunner, AnalysisRunSpec
+                from cquant.bt_analyzer.run import (
+                    AnalysisRunner, AnalysisRunSpec, load_result,
+                )
                 runner = AnalysisRunner(catalog)
-                runner.run(AnalysisRunSpec(backtest_run_id=run_id))
+                runner.run(
+                    load_result(run_id, catalog),
+                    AnalysisRunSpec(backtest_run_id=run_id),
+                )
                 logger.info("Auto-analysis completed for run %s", run_id)
             except Exception as analysis_exc:
-                logger.warning("Auto-analysis failed for run %s: %s", run_id, analysis_exc)
+                # Surface the failure in the job record (status + error) instead
+                # of a silent warning log — the backtest itself completed.
+                logger.exception("Auto-analysis failed for run %s", run_id)
+                _save_job(
+                    catalog, job_id, "backtest", "failed", run_id=run_id,
+                    error=(
+                        f"Backtest completed (run_id={run_id}) but auto-analysis "
+                        f"failed: {str(analysis_exc)[:200]}"
+                    ),
+                )
         except Exception as exc:
             logger.exception("Backtest job %s failed", job_id)
             _save_job(catalog, job_id, "backtest", "failed", error=f"Backtest failed: {str(exc)[:200]}")
@@ -991,16 +1005,22 @@ async def trigger_analysis(
 
     def _run_analysis() -> None:
         try:
-            from cquant.bt_analyzer.run import AnalysisRunner, AnalysisRunSpec
+            from cquant.bt_analyzer.run import (
+                AnalysisRunner, AnalysisRunSpec, load_result,
+            )
+            # Reconstruct the BacktestResult from persisted artifacts and pass
+            # it separately from the AnalysisRunSpec — the runner signature is
+            # run(result: BacktestResult, spec: AnalysisRunSpec).
+            result = load_result(run_id, catalog)
             runner = AnalysisRunner(catalog)
-            analysis_id = runner.run(AnalysisRunSpec(
+            report = runner.run(result, AnalysisRunSpec(
                 backtest_run_id=run_id,
                 embargo_days=embargo_days,
             ))
-            _save_job(catalog, job_id, "analysis", "completed", run_id=analysis_id)
+            _save_job(catalog, job_id, "analysis", "completed", run_id=report.analysis_run_id)
         except Exception as exc:
             logger.exception("Analysis job %s failed", job_id)
-            _save_job(catalog, job_id, "analysis", "failed", error=f"Analysis failed: {str(exc)[:200]}")
+            _save_job(catalog, job_id, "analysis", "failed", run_id=run_id, error=f"Analysis failed: {str(exc)[:200]}")
 
     background_tasks.add_task(run_job_async, _run_analysis)
     return {"job_id": job_id, "run_id": run_id, "status": "running"}
@@ -1858,12 +1878,22 @@ async def export_backtest_report(
         raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'. Supported: 'html', 'pdf'.")
 
     # 1. 加载运行元数据（合并为单次查询）
-    run_df = catalog.query(
-        "SELECT run_id, strategy_id, engine, status, dataset_version, "
-        "benchmark_asset_id, started_at, completed_at "
-        "FROM gold_backtest_runs WHERE run_id = ?",
-        [run_id],
-    )
+    try:
+        run_df = catalog.query(
+            "SELECT run_id, strategy_id, engine, status, dataset_version, "
+            "benchmark_asset_id, started_at, completed_at "
+            "FROM gold_backtest_runs WHERE run_id = ?",
+            [run_id],
+        )
+    except Exception as exc:
+        # Legacy schema without the ALTER-added benchmark_asset_id column
+        logger.warning("export: benchmark_asset_id missing for %s: %s", run_id, exc)
+        run_df = catalog.query(
+            "SELECT run_id, strategy_id, engine, status, dataset_version, "
+            "started_at, completed_at "
+            "FROM gold_backtest_runs WHERE run_id = ?",
+            [run_id],
+        )
     if run_df.is_empty():
         raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
     run_info = run_df.to_dicts()[0]
@@ -1900,14 +1930,17 @@ async def export_backtest_report(
     bm_values: list[float] = []
     bm_asset = run_info.get("benchmark_asset_id") or ""
     if bm_asset and nav_dates:
-        bm_df = catalog.query(
-            "SELECT trade_date, close FROM silver_prices_1d "
-            "WHERE asset_id = ? AND trade_date >= ? AND trade_date <= ? ORDER BY trade_date",
-            [bm_asset, nav_dates[0], nav_dates[-1]],
-        )
-        if not bm_df.is_empty():
-            first = float(bm_df["close"][0])
-            bm_values = [float(r["close"]) / first for r in bm_df.to_dicts()]
+        try:
+            bm_df = catalog.query(
+                "SELECT trade_date, close FROM silver_prices_1d "
+                "WHERE asset_id = ? AND trade_date >= ? AND trade_date <= ? ORDER BY trade_date",
+                [bm_asset, nav_dates[0], nav_dates[-1]],
+            )
+            if not bm_df.is_empty():
+                first = float(bm_df["close"][0])
+                bm_values = [float(r["close"]) / first for r in bm_df.to_dicts()]
+        except Exception as exc:
+            logger.warning("export: benchmark curve unavailable for %s: %s", run_id, exc)
 
     # 5. 年度收益
     annual_returns: list[tuple[str, float]] = []
@@ -1931,12 +1964,15 @@ async def export_backtest_report(
 
     # 7. 加载回撤数据
     drawdown_periods: list[dict] = []
-    dd_df = catalog.query(
-        "SELECT * FROM gold_drawdown_periods WHERE run_id = ? ORDER BY period_id",
-        [run_id],
-    )
-    if not dd_df.is_empty():
-        drawdown_periods = dd_df.to_dicts()
+    try:
+        dd_df = catalog.query(
+            "SELECT * FROM gold_drawdown_periods WHERE run_id = ? ORDER BY period_id",
+            [run_id],
+        )
+        if not dd_df.is_empty():
+            drawdown_periods = dd_df.to_dicts()
+    except Exception as exc:
+        logger.warning("export: drawdown periods unavailable for %s: %s", run_id, exc)
 
     # Compute daily drawdown series for chart
     drawdown_series: list[dict] = []
@@ -1949,13 +1985,16 @@ async def export_backtest_report(
 
     # 8. 加载滚动风险指标
     rolling_risk: list[dict] = []
-    risk_rolling_df = catalog.query(
-        'SELECT trade_date, rolling_vol AS volatility '
-        'FROM gold_risk_rolling WHERE run_id = ? AND "window" = 60 ORDER BY trade_date',
-        [run_id],
-    )
-    if not risk_rolling_df.is_empty():
-        rolling_risk = risk_rolling_df.to_dicts()
+    try:
+        risk_rolling_df = catalog.query(
+            'SELECT trade_date, rolling_vol AS volatility '
+            'FROM gold_risk_rolling WHERE run_id = ? AND "window" = 60 ORDER BY trade_date',
+            [run_id],
+        )
+        if not risk_rolling_df.is_empty():
+            rolling_risk = risk_rolling_df.to_dicts()
+    except Exception as exc:
+        logger.warning("export: rolling risk unavailable for %s: %s", run_id, exc)
 
     # 9. 加载收益率分布
     returns_list: list[float] = []
@@ -1968,15 +2007,18 @@ async def export_backtest_report(
 
     # 10. 加载 TCA 数据
     tca_data: dict = {}
-    tca_df = catalog.query(
-        "SELECT * FROM gold_bt_tca WHERE analysis_run_id IN "
-        "(SELECT analysis_run_id FROM gold_bt_analysis_runs WHERE backtest_run_id = ? "
-        "ORDER BY created_at DESC LIMIT 1)",
-        [run_id],
-    )
-    if not tca_df.is_empty():
-        tca_data = tca_df.to_dicts()[0]
-        tca_data["implementation_shortfall"] = _compute_implementation_shortfall(catalog, run_id)
+    try:
+        tca_df = catalog.query(
+            "SELECT * FROM gold_bt_tca WHERE analysis_run_id IN "
+            "(SELECT analysis_run_id FROM gold_bt_analysis_runs WHERE backtest_run_id = ? "
+            "ORDER BY created_at DESC LIMIT 1)",
+            [run_id],
+        )
+        if not tca_df.is_empty():
+            tca_data = tca_df.to_dicts()[0]
+            tca_data["implementation_shortfall"] = _compute_implementation_shortfall(catalog, run_id)
+    except Exception as exc:
+        logger.warning("export: TCA data unavailable for %s: %s", run_id, exc)
 
 
     # 12. 生成服务端 SVG 图表（无外部依赖，离线可用）

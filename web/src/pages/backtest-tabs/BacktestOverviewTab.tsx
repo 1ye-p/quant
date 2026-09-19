@@ -34,7 +34,6 @@ export function BacktestOverviewTab() {
   const [exportOpen, setExportOpen] = useState(false)
   const [showSensitivity, setShowSensitivity] = useState(false)
   const [sensitivityResult, setSensitivityResult] = useState<any>(null)
-  const [exportLoading, setExportLoading] = useState<string | null>(null)
   const [deployStep, setDeployStep] = useState(1)
   const [deployCash, setDeployCash] = useState('1000000')
   const [deployRiskMode, setDeployRiskMode] = useState<'conservative' | 'moderate' | 'aggressive'>('conservative')
@@ -190,24 +189,12 @@ export function BacktestOverviewTab() {
             onClick={() => setExportOpen(!exportOpen)}
             className="btn-secondary text-xs flex items-center gap-1"
           >
-            {exportLoading ? (
-              <>
-                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                {t('component.backtest_overview.export.exporting', { format: exportLoading.toUpperCase() })}
-              </>
-            ) : (
-              <>
-                {t('component.backtest_overview.export.report')}
-                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </>
-            )}
+            {t('component.backtest_overview.export.report')}
+            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
-          {exportOpen && !exportLoading && (
+          {exportOpen && (
             <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded shadow-lg z-10">
               <a
                 href={`/api/v1/backtests/${selectedId}/export?format=html`}
@@ -218,36 +205,12 @@ export function BacktestOverviewTab() {
               >
                 {t('component.backtest_overview.export.html')}
               </a>
-              <button
-                className="block w-full text-left px-3 py-2 text-xs hover:bg-gray-50"
-                onClick={async () => {
-                  setExportOpen(false)
-                  setExportLoading('pdf')
-                  try {
-                    const res = await fetch(`/api/v1/backtests/${selectedId}/export?format=pdf`)
-                    if (!res.ok) {
-                      const err = await res.json().catch(() => ({ detail: t('component.backtest_overview.export.failed') }))
-                      toast.error(err.detail || t('component.backtest_overview.export.pdf_failed'))
-                      return
-                    }
-                    const blob = await res.blob()
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = `backtest_report_${selectedId?.slice(0, 12)}.pdf`
-                    document.body.appendChild(a)
-                    a.click()
-                    a.remove()
-                    URL.revokeObjectURL(url)
-                  } catch {
-                    toast.error(t('component.backtest_overview.export.pdf_failed'))
-                  } finally {
-                    setExportLoading(null)
-                  }
-                }}
+              <div
+                className="block w-full text-left px-3 py-2 text-xs text-gray-400 cursor-not-allowed"
+                title={t('component.backtest_overview.export.pdf_note')}
               >
-                {t('component.backtest_overview.export.pdf')}
-              </button>
+                {t('component.backtest_overview.export.pdf')}（{t('component.backtest_overview.export.pdf_unavailable')}）
+              </div>
             </div>
           )}
         </div>

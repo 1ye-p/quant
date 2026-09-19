@@ -1009,7 +1009,9 @@
         "html": "导出 HTML",
         "pdf": "导出 PDF",
         "failed": "导出失败",
-        "pdf_failed": "PDF 导出失败"
+        "pdf_failed": "PDF 导出失败",
+        "pdf_note": "PDF 导出依赖缺失（weasyprint 系统库未安装），请使用 HTML 报告或 Markdown 研报替代",
+        "pdf_unavailable": "暂不可用"
       },
       "deploy": {
         "modal_title": "部署为模拟策略",

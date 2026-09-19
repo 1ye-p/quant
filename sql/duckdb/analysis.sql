@@ -48,6 +48,22 @@ CREATE TABLE IF NOT EXISTS gold_bt_multiple_testing (
     PRIMARY KEY (analysis_run_id, method)
 );
 
+-- One-click validation suite (Phase 4 T1): aggregated checklist + per-step
+-- outcomes for POST /backtests/{run_id}/validation-suite. One row per suite
+-- execution (suite_id PK); GET reads the latest by created_at.
+CREATE TABLE IF NOT EXISTS gold_validation_suites (
+    suite_id       VARCHAR PRIMARY KEY,
+    run_id         VARCHAR NOT NULL,
+    psr            DOUBLE,
+    dsr            DOUBLE,
+    checklist_json JSON,
+    steps_json     JSON,
+    created_at     TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_validation_suites_run
+    ON gold_validation_suites (run_id);
+
 -- gold_risk_rolling
 CREATE TABLE IF NOT EXISTS gold_risk_rolling (
     run_id VARCHAR,

@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from cquant.api_server.deps import CatalogDep, run_job_async
+from cquant.backtest_vector.sensitivity import GridSearchSensitivity
 
 _ARTIFACTS_BASE = pathlib.Path("data/backtest_artifacts").resolve()
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
@@ -2795,6 +2796,542 @@ async def get_sensitivity_history(run_id: str, catalog: CatalogDep) -> dict:
     except Exception as exc:
         logger.warning("Failed to fetch sensitivity history for run %s: %s", run_id, exc)
         return {"history": []}
+
+
+# ── One-click Validation Suite (Phase 4 T1) ──────────────────────────────────
+
+_VALIDATION_SUITE_DDL = """
+CREATE TABLE IF NOT EXISTS gold_validation_suites (
+    suite_id       VARCHAR PRIMARY KEY,
+    run_id         VARCHAR NOT NULL,
+    psr            DOUBLE,
+    dsr            DOUBLE,
+    checklist_json JSON,
+    steps_json     JSON,
+    created_at     TIMESTAMPTZ NOT NULL
+)
+"""
+
+# ── Checklist thresholds（醒目记录：checklist 输出中带同名常量，便于前端展示）──
+PSR_PASS_THRESHOLD = 0.95          # psr_pass: PSR > 95%
+FOLD_STABILITY_CV_MAX = 0.5        # fold_stable: fold sharpe std/mean < 0.5
+SENSITIVITY_CV_MAX = 0.5           # sensitivity_flat: 扰动下 sharpe CV < 0.5
+MIN_REGIME_CYCLES = 6              # regime_cycles_sufficient: 周期数 >= 6
+MAX_SENSITIVITY_COMBOS = 50        # 与既有 /sensitivity 约束一致的上限
+WF_SUITE_N_FOLDS = 4               # 套件内 walk-forward fold 数
+
+
+def _ensure_validation_table(catalog) -> None:
+    """Create gold_validation_suites if missing (idempotent)."""
+    try:
+        catalog.execute(_VALIDATION_SUITE_DDL)
+    except Exception as exc:
+        logger.debug("_ensure_validation_table: %s", exc)
+
+
+from dataclasses import asdict, dataclass
+
+
+@dataclass
+class ValidationChecklist:
+    """一键验证套件聚合清单（每项三态：True/False/None=不适用或该步失败）。"""
+
+    psr_pass: bool | None                   # PSR > PSR_PASS_THRESHOLD
+    fold_stable: bool | None                # WF fold sharpe CV < FOLD_STABILITY_CV_MAX
+    sensitivity_flat: bool | None           # 参数扰动下 sharpe CV < SENSITIVITY_CV_MAX
+    regime_cycles_sufficient: bool | None   # regime 周期数 >= MIN_REGIME_CYCLES（None=非 regime）
+    cost_assumptions: dict                  # 滑点/佣金/冲击假设（run spec cost_model + 默认值）
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["thresholds"] = {
+            "psr_pass": PSR_PASS_THRESHOLD,
+            "fold_stability_cv_max": FOLD_STABILITY_CV_MAX,
+            "sensitivity_cv_max": SENSITIVITY_CV_MAX,
+            "min_regime_cycles": MIN_REGIME_CYCLES,
+        }
+        return d
+
+
+def _resolve_dsl_spec(catalog, strategy_id: str, tags: dict) -> dict | None:
+    """Resolve the run's DSL spec: run tags first, then strategy config."""
+    dsl = tags.get("dsl_spec")
+    if dsl:
+        return dsl
+    try:
+        strat_df = catalog.query(
+            "SELECT parsed_config FROM meta_strategy_configs WHERE strategy_id = ?",
+            [strategy_id],
+        )
+        if not strat_df.is_empty():
+            parsed = json.loads(strat_df["parsed_config"].item() or "{}")
+            return parsed.get("dsl_spec")
+    except Exception as exc:
+        logger.debug("_resolve_dsl_spec: %s", exc)
+    return None
+
+
+def _dsl_param_space(dsl: dict) -> dict[str, list[float]]:
+    """从 dsl_spec 提取参数空间（各值 ±10%）。
+
+    - 因子权重：score[].weight（非零项）±10%
+    - regime 阈值：threshold rules[].position_scale / switch states[].position_scale
+      （可确定的标量）±10%；when/enter_when 表达式内数值不做改写（非确定标量）
+    """
+    space: dict[str, list[float]] = {}
+    for item in dsl.get("score") or []:
+        w = float(item.get("weight") or 0.0)
+        if w != 0:
+            space[f"score_weight:{item['factor']}"] = [round(w * 0.9, 10), round(w * 1.1, 10)]
+    regime = dsl.get("regime") or None
+    if regime:
+        for i, rule in enumerate(regime.get("rules") or []):
+            if "position_scale" in rule:
+                s = float(rule["position_scale"])
+                space[f"regime_scale:rules[{i}]"] = [round(s * 0.9, 10), round(s * 1.1, 10)]
+        for i, state in enumerate(regime.get("states") or []):
+            if "position_scale" in state:
+                s = float(state["position_scale"])
+                space[f"regime_scale:states[{i}]"] = [round(s * 0.9, 10), round(s * 1.1, 10)]
+    return space
+
+
+def _cap_param_space(space: dict[str, list], max_combos: int) -> tuple[dict, list[str]]:
+    """按声明顺序保留参数直到组合数超限；返回（截断后空间, 被丢弃的参数名）。"""
+    capped: dict[str, list] = {}
+    dropped: list[str] = []
+    n = 1
+    for key, values in space.items():
+        if n * len(values) > max_combos:
+            dropped.append(key)
+            continue
+        capped[key] = values
+        n *= len(values)
+    return capped, dropped
+
+
+def _fallback_param_space(top_n: int) -> dict[str, list]:
+    """非 DSL 策略退化空间：top_n ±10%（去重后不足两点则视为无可扫参数）。"""
+    lo = max(1, round(top_n * 0.9))
+    hi = max(1, round(top_n * 1.1))
+    values = sorted({lo, top_n, hi} - {top_n}) or []
+    if not values:
+        return {}
+    return {"top_n": sorted({lo, hi})}
+
+
+class _SuiteSensitivity(GridSearchSensitivity):
+    """GridSearchSensitivity 的套件适配：DSL 权重 / regime scale / top_n 参数
+    通过重建策略生效（基类只 merge extra，无法影响已构建的 strategy）。"""
+
+    def __init__(self, *, runner, run_spec, dsl_base: dict | None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._suite_runner = runner
+        self._suite_run_spec = run_spec
+        self._suite_dsl = dsl_base
+
+    def _create_spec_with_params(self, params: dict):
+        import copy
+        from dataclasses import replace as dc_replace
+
+        dsl = copy.deepcopy(self._suite_dsl) if self._suite_dsl else None
+        run_spec = self._suite_run_spec
+        extra_params: dict = {}
+        rebuild = False
+        for key, val in params.items():
+            if dsl is not None and key.startswith("score_weight:"):
+                factor = key.split(":", 1)[1]
+                for item in dsl.get("score") or []:
+                    if item.get("factor") == factor:
+                        item["weight"] = float(val)
+                rebuild = True
+            elif dsl is not None and key.startswith("regime_scale:"):
+                path = key.split(":", 1)[1]           # e.g. rules[0] / states[1]
+                kind, idx = path[:-1].split("[")
+                target = (dsl.get("regime") or {}).get(kind) or []
+                i = int(idx)
+                if i < len(target) and "position_scale" in target[i]:
+                    target[i]["position_scale"] = float(val)
+                rebuild = True
+            elif key == "top_n":
+                run_spec = dc_replace(run_spec, top_n=int(val))
+                rebuild = True
+            else:
+                extra_params[key] = val
+
+        strategy = (
+            self._suite_runner._build_strategy(
+                dc_replace(run_spec, dsl_spec=dsl or run_spec.dsl_spec)
+            )
+            if rebuild
+            else self._base_spec.strategy
+        )
+        new_extra = {**self._base_spec.extra, **extra_params}
+        return type(self._base_spec)(
+            strategy=strategy,
+            prices=self._base_spec.prices,
+            start_date=self._base_spec.start_date,
+            end_date=self._base_spec.end_date,
+            initial_cash=self._base_spec.initial_cash,
+            cost_model=self._base_spec.cost_model,
+            sizer=self._base_spec.sizer,
+            risk_policies=self._base_spec.risk_policies,
+            rebalance_frequency=self._base_spec.rebalance_frequency,
+            benchmark_asset_id=self._base_spec.benchmark_asset_id,
+            universe_id=self._base_spec.universe_id,
+            features=self._base_spec.features,
+            tags=self._base_spec.tags,
+            optimizer=self._base_spec.optimizer,
+            extra=new_extra,
+        )
+
+
+def _cv(values: list[float]) -> float:
+    """变异系数 std/|mean|（mean≈0 且 std≈0 时返回 0，否则 inf）。"""
+    import math as _math
+    import statistics as _stats
+
+    if len(values) < 2:
+        return 0.0
+    mean = _stats.fmean(values)
+    std = _stats.pstdev(values)
+    if std < 1e-12:
+        return 0.0
+    if abs(mean) < 1e-12:
+        return float("inf")
+    return std / abs(mean)
+
+
+def _slice_fold_sharpes(result, n_folds: int) -> list[float]:
+    """兜底 fold 指标：把已持久化的 portfolio_returns 切成 n 折，逐折算 sharpe。"""
+    from cquant.backtest_vector.metrics import compute_metrics
+
+    rets = result.portfolio_returns.get_column("portfolio_return").fill_null(0.0)
+    n = len(rets)
+    if n < n_folds * 2:
+        return []
+    size = n // n_folds
+    return [
+        compute_metrics(rets[i * size: (i + 1) * size]).sharpe_ratio
+        for i in range(n_folds)
+    ]
+
+
+def _execute_validation_suite(catalog, run_id: str) -> dict:
+    """执行套件各步（单步失败隔离），返回 {steps, psr, dsr, checklist}。"""
+    from cquant.bt_analyzer.run import (
+        AnalysisRunner, AnalysisRunSpec, load_result,
+    )
+
+    result = load_result(run_id, catalog)  # 产物缺失 → 整个套件 failed
+
+    run_row = catalog.query(
+        "SELECT strategy_id, dataset_version, tags, "
+        "signal_set_version, benchmark_asset_id, cost_model_config "
+        "FROM gold_backtest_runs WHERE run_id = ?",
+        [run_id],
+    )
+    run_info = run_row.to_dicts()[0] if not run_row.is_empty() else {}
+    tags = json.loads(run_info.get("tags") or "{}")
+    dsl_spec = _resolve_dsl_spec(catalog, run_info.get("strategy_id") or "", tags)
+
+    steps: list[dict] = []
+    psr: float | None = None
+    dsr: float | None = None
+
+    # ── Step 1: PSR/DSR（复用 AnalysisRunner，落 gold_bt_analysis_runs） ──────
+    try:
+        report = AnalysisRunner(catalog).run(
+            result, AnalysisRunSpec(backtest_run_id=run_id)
+        )
+        psr, dsr = report.psr, report.dsr
+        steps.append({"step": "psr_dsr", "status": "completed",
+                      "psr": psr, "dsr": dsr})
+    except Exception as exc:
+        logger.exception("validation-suite psr/dsr failed for %s", run_id)
+        steps.append({"step": "psr_dsr", "status": "failed",
+                      "error": str(exc)[:300]})
+
+    # ── Step 2: walk-forward（复用 WalkForwardRefit；0 成功折 → 兜底切returns）─
+    fold_sharpes: list[float] = []
+    try:
+        from cquant.bt_analyzer.walk_forward_refit import WalkForwardRefit
+
+        wf = WalkForwardRefit.from_backtest_result(result, n_folds=WF_SUITE_N_FOLDS)
+        payload = {
+            "step": "walk_forward", "status": "completed",
+            "summary": wf.summary(),
+            "n_folds": wf.total_folds,
+            "successful_folds": wf.successful_folds,
+        }
+        if wf.successful_folds >= 2:
+            fold_sharpes = [
+                f.test_metrics.get("sharpe_ratio", 0.0)
+                for f in wf.folds if f.success
+            ]
+        else:
+            # 重建 spec 无 prices → 引擎无法重跑折；退化为对已持久化收益切片
+            fold_sharpes = _slice_fold_sharpes(result, WF_SUITE_N_FOLDS)
+            payload["fold_source"] = "returns_slice"
+        if dsl_spec is not None:
+            # D7 标注：套件内 WF 不对 DSL 因子权重做逐折重估
+            payload["weights_refit"] = False
+            payload["weights_refit_note"] = "权重未重估（walk-forward 复用原始因子权重，不对每折重估权重）"
+        payload["fold_sharpes"] = fold_sharpes
+        steps.append(payload)
+    except Exception as exc:
+        logger.exception("validation-suite walk-forward failed for %s", run_id)
+        steps.append({"step": "walk_forward", "status": "failed",
+                      "error": str(exc)[:300]})
+
+    fold_stable: bool | None = None
+    if fold_sharpes:
+        fold_cv = _cv(fold_sharpes)
+        fold_stable = fold_cv < FOLD_STABILITY_CV_MAX
+        steps[-1]["fold_sharpe_cv"] = fold_cv
+        steps[-1]["fold_stable"] = fold_stable
+
+    # ── Step 3: 参数敏感性（DSL 权重/regime scale ±10%；非 DSL 退化 top_n） ──
+    sensitivity_flat: bool | None = None
+    try:
+        from cquant.backtest_vector.engine import BacktestSpec
+        from cquant.backtest_vector.run import BacktestRunner, BacktestRunSpec
+        from cquant.backtest_vector.sensitivity import ParameterGrid
+
+        if dsl_spec is not None:
+            space = _dsl_param_space(dsl_spec)
+            mode = "dsl"
+        else:
+            space = _fallback_param_space(int(tags.get("top_n", 10)))
+            mode = "fallback"
+        space, dropped = _cap_param_space(space, MAX_SENSITIVITY_COMBOS)
+        if not space:
+            steps.append({
+                "step": "sensitivity", "status": "skipped", "mode": mode,
+                "reason": "无可扫描的确定标量参数（DSL 无权重/regime，或 top_n ±10% 无变化）",
+            })
+        else:
+            runner = BacktestRunner(catalog)
+            run_spec = BacktestRunSpec(
+                dataset_version=run_info.get("dataset_version") or "v1",
+                strategy_id=run_info.get("strategy_id") or "",
+                # gold_backtest_runs has no start/end columns — use the dates
+                # reconstructed from the run's portfolio snapshots instead.
+                start_date=result.spec.start_date,
+                end_date=result.spec.end_date,
+                feature_set_version=run_info.get("signal_set_version") or "",
+                benchmark_asset_id=run_info.get("benchmark_asset_id") or "",
+                top_n=int(tags.get("top_n", 10)),
+                sort_factor=tags.get("sort_factor", "ret_20d"),
+                tags=tags,
+                strategy_type="DSL" if dsl_spec is not None else "StaticTopN",
+                dsl_spec=dsl_spec or {},
+            )
+            prices = runner._load_prices(run_spec)
+            if prices.is_empty():
+                raise ValueError("no price data for sensitivity re-run")
+            features = runner._load_features(run_spec)
+            base_strategy = runner._build_strategy(run_spec)
+            cost_model = runner._detect_cost_model(prices)
+            base_spec = BacktestSpec(
+                strategy=base_strategy, prices=prices,
+                start_date=run_spec.start_date, end_date=run_spec.end_date,
+                initial_cash=run_spec.initial_cash, cost_model=cost_model,
+                features=features, tags=tags,
+                risk_policies=run_spec.risk_policies,
+                extra={"catalog": catalog},
+            )
+            analyzer = _SuiteSensitivity(
+                runner=runner, run_spec=run_spec, dsl_base=dsl_spec,
+                base_spec=base_spec, param_grid=ParameterGrid(space),
+                primary_metric="sharpe_ratio",
+            )
+            sens = analyzer.run(catalog)
+            primary = [
+                v for v in sens.results_df["primary_metric"].to_list()
+                if v is not None and math.isfinite(v)
+            ]
+            sens_cv = _cv(primary) if primary else None
+            if sens_cv is not None:
+                sensitivity_flat = sens_cv < SENSITIVITY_CV_MAX
+            steps.append({
+                "step": "sensitivity", "status": "completed", "mode": mode,
+                "param_space": space, "dropped_params": dropped,
+                "n_combinations": len(sens.combinations),
+                "robustness_score": sens.robustness_score,
+                "primary_metric_cv": sens_cv,
+                "sensitivity_flat": sensitivity_flat,
+                "best_params": sens.best_params,
+            })
+    except Exception as exc:
+        logger.exception("validation-suite sensitivity failed for %s", run_id)
+        steps.append({"step": "sensitivity", "status": "failed",
+                      "error": str(exc)[:300]})
+
+    # ── Step 4: regime 周期统计（仅 DSL + regime 段时执行） ────────────────────
+    regime_cycles: int | None = None
+    regime_sufficient: bool | None = None
+    try:
+        regime_def = None
+        if dsl_spec is not None and dsl_spec.get("regime"):
+            from cquant.strategy_dsl.schema import StrategyDSL
+
+            regime_def = StrategyDSL.from_dict(dsl_spec).regime
+        if regime_def is None:
+            steps.append({"step": "regime_cycles", "status": "skipped",
+                          "reason": "非 regime 策略（dsl_spec 无 regime 段）"})
+        else:
+            from cquant.strategy_dsl.market_context import MarketSeriesContext
+            from cquant.strategy_dsl.regime import RegimeStateMachine
+
+            sm = RegimeStateMachine(regime_def, MarketSeriesContext(catalog))
+            trade_dates = result.portfolio_returns.get_column("trade_date").to_list()
+            prev_key = None
+            transitions = 0
+            for td in trade_dates:
+                rr = sm.evaluate(td)
+                key = (rr.state, round(float(rr.position_scale), 6))
+                if prev_key is not None and key != prev_key:
+                    transitions += 1
+                prev_key = key
+            regime_cycles = transitions
+            regime_sufficient = transitions >= MIN_REGIME_CYCLES
+            steps.append({
+                "step": "regime_cycles", "status": "completed",
+                "cycles": regime_cycles,
+                "min_required": MIN_REGIME_CYCLES,
+                "sufficient": regime_sufficient,
+            })
+    except Exception as exc:
+        logger.exception("validation-suite regime cycles failed for %s", run_id)
+        steps.append({"step": "regime_cycles", "status": "failed",
+                      "error": str(exc)[:300]})
+
+    # ── cost assumptions（醒目展示默认值） ────────────────────────────────────
+    from cquant.backtest_vector.costs import CostModel
+
+    try:
+        cm_cfg = json.loads(run_info.get("cost_model_config") or "{}")
+    except Exception:
+        cm_cfg = {}
+    defaults = CostModel()
+    cost_assumptions = {
+        "run_config": cm_cfg,
+        "defaults": {
+            "commission_rate": str(defaults.commission_rate),
+            "min_commission": str(defaults.min_commission),
+            "stamp_duty_rate": str(defaults.stamp_duty_rate),
+            "stamp_duty_side": defaults.stamp_duty_side,
+            "slippage_rate": str(defaults.slippage_rate),
+            "market_impact_rate": str(defaults.market_impact_rate),
+        },
+        "defaults_used": cm_cfg in ({}, {"model": "default"}),
+    }
+    if cost_assumptions["defaults_used"]:
+        cost_assumptions["note"] = (
+            "该回测使用默认成本假设（佣金/印花税/滑点/冲击均为默认值）——"
+            "结论依赖这些假设，请确认与目标市场的实际成本一致"
+        )
+
+    checklist = ValidationChecklist(
+        psr_pass=(psr is not None and psr > PSR_PASS_THRESHOLD),
+        fold_stable=fold_stable,
+        sensitivity_flat=sensitivity_flat,
+        regime_cycles_sufficient=regime_sufficient,
+        cost_assumptions=cost_assumptions,
+    )
+    return {"steps": steps, "psr": psr, "dsr": dsr, "checklist": checklist}
+
+
+class ValidationSuiteBody(BaseModel):
+    """Request body for the one-click validation suite (reserved)."""
+    n_folds: int | None = None
+
+
+@router.post("/{run_id}/validation-suite")
+async def run_validation_suite(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    catalog: CatalogDep,
+    body: ValidationSuiteBody | None = None,
+) -> dict:
+    """一键验证套件：walk-forward + PSR/DSR + 参数敏感性 + regime 周期统计。
+
+    复用 JOB_SEMAPHORE 的 job 生命周期（_save_job + GET /backtests/jobs/{job_id}
+    轮询）；套件内各步骤独立 try/except——单步失败不炸整个套件，结果里标
+    failed + 原因。聚合 ValidationSuiteResult 落 gold_validation_suites，
+    通过 GET /backtests/{run_id}/validation-suite 读取最近结果。
+    """
+    df = catalog.query(
+        "SELECT run_id, status FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+    )
+    if df.is_empty():
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+    if df["status"][0] != "completed":
+        raise HTTPException(status_code=422, detail="Only completed backtests can be validated")
+
+    _ensure_job_table(catalog)
+    _ensure_validation_table(catalog)
+    job_id = str(uuid.uuid4())
+    _save_job(catalog, job_id, job_type="validation_suite", status="running", run_id=run_id)
+
+    def _run_suite() -> None:
+        try:
+            _ensure_validation_table(catalog)
+            outcome = _execute_validation_suite(catalog, run_id)
+            suite_id = str(uuid.uuid4())
+            created = datetime.now(tz=timezone.utc).isoformat()
+            catalog.execute(
+                "INSERT INTO gold_validation_suites "
+                "(suite_id, run_id, psr, dsr, checklist_json, steps_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    suite_id, run_id, outcome["psr"], outcome["dsr"],
+                    json.dumps(outcome["checklist"].to_dict(), default=str),
+                    json.dumps(outcome["steps"], default=str),
+                    created,
+                ],
+            )
+            _save_job(catalog, job_id, "validation_suite", "completed", run_id=run_id)
+        except Exception as exc:
+            logger.exception("Validation suite job %s failed", job_id)
+            _save_job(catalog, job_id, "validation_suite", "failed", run_id=run_id,
+                      error=f"Validation suite failed: {str(exc)[:200]}")
+
+    background_tasks.add_task(run_job_async, _run_suite)
+    return {"job_id": job_id, "run_id": run_id, "status": "running"}
+
+
+@router.get("/{run_id}/validation-suite")
+async def get_validation_suite(run_id: str, catalog: CatalogDep) -> dict:
+    """读取最近一次验证套件结果（前端轮询）。"""
+    _ensure_validation_table(catalog)
+    df = catalog.query(
+        "SELECT suite_id, run_id, psr, dsr, checklist_json, steps_json, created_at "
+        "FROM gold_validation_suites WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+        [run_id],
+    )
+    if df.is_empty():
+        raise HTTPException(status_code=404, detail=f"No validation suite found for run '{run_id}'")
+    row = df.to_dicts()[0]
+
+    def _parse(raw):
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {}
+        return raw
+
+    return {
+        "suite_id": row["suite_id"],
+        "run_id": row["run_id"],
+        "psr": row["psr"],
+        "dsr": row["dsr"],
+        "checklist": _parse(row.get("checklist_json")),
+        "steps": _parse(row.get("steps_json")),
+        "created_at": str(row.get("created_at", "")),
+    }
 
 
 # ── Calendar Analysis ───────────────────────────────────────────────────────

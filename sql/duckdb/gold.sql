@@ -177,3 +177,11 @@ CREATE TABLE IF NOT EXISTS shares (
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at    TIMESTAMP
 );
+
+-- ── AI research reports (Phase 4 T6) ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gold_research_reports (
+    report_id   VARCHAR PRIMARY KEY,
+    run_id      VARCHAR NOT NULL,
+    content_md  VARCHAR NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL
+);

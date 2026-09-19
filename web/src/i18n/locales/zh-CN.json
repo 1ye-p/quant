@@ -2412,7 +2412,8 @@
         "feature-importance": "特征重要性",
         "model-diagnostics": "模型诊断",
         "trade-analysis": "交易分析",
-        "regime_timeline": "Regime 时间线"
+        "regime_timeline": "Regime 时间线",
+        "report": "AI 研报"
       },
       "no_benchmark_hint": "未设置基准",
       "validation": {
@@ -2494,6 +2495,17 @@
             "external_na": "N/A"
           }
         }
+      },
+      "report": {
+        "title": "AI 研究报告",
+        "subtitle": "基于本回测的指标、统计检验（PSR/DSR）与验证清单自动生成中文研报，并同步至知识库",
+        "generate": "生成研究报告",
+        "generating": "生成中…",
+        "done": "研究报告已生成",
+        "failed": "研报生成失败",
+        "empty": "尚未生成研究报告。点击上方按钮，AI 将基于本回测上下文生成中文 Markdown 研报。",
+        "generated_at": "生成时间",
+        "chart_spec_note": "注：报告中的图表以 spec 文本形式展示（图表内嵌渲染将在后续版本提供）。"
       },
       "regime": {
         "not_applicable": "该回测未启用 regime（市场状态择时），本页不适用",

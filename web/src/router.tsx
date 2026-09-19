@@ -31,6 +31,7 @@ const BacktestFeatureImportanceTab = named(() => import('@/pages/backtest-tabs/B
 const BacktestModelDiagnosticsTab = named(() => import('@/pages/backtest-tabs/BacktestModelDiagnosticsTab'), 'BacktestModelDiagnosticsTab')
 const BacktestTradeAnalysisTab = named(() => import('@/pages/backtest-tabs/BacktestTradeAnalysisTab'), 'BacktestTradeAnalysisTab')
 const BacktestRegimeTimelineTab = named(() => import('@/pages/backtest-tabs/BacktestRegimeTimelineTab'), 'BacktestRegimeTimelineTab')
+const BacktestReportTab = named(() => import('@/pages/backtest-tabs/BacktestReportTab'), 'BacktestReportTab')
 const KnowledgePage = named(() => import('@/pages/KnowledgePage'), 'KnowledgePage')
 const AdvisorPage   = named(() => import('@/pages/AdvisorPage'), 'AdvisorPage')
 const FactorsPage   = named(() => import('@/pages/FactorsPage'), 'FactorsPage')
@@ -83,6 +84,7 @@ export const router = createBrowserRouter([
               { path: 'model-diagnostics', element: <BacktestModelDiagnosticsTab /> },
               { path: 'trade-analysis', element: <BacktestTradeAnalysisTab /> },
               { path: 'regime_timeline', element: <BacktestRegimeTimelineTab /> },
+              { path: 'report', element: <BacktestReportTab /> },
             ],
           },
         ],

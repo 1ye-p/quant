@@ -232,6 +232,27 @@ export const backtestsApi = {
     config?: RequestConfig,
   ) =>
     api.post<StrategyRankResult>('/backtests/rank', body, config),
+
+  // ── AI Research Report (Phase 4 T6) ───────────────────────────────────────
+
+  /** Trigger AI report generation; poll via pollJob(job_id), then getReport. */
+  generateReport: (runId: string, config?: RequestConfig) =>
+    api.post<{ job_id: string; run_id: string; status: string }>(
+      `/backtests/${runId}/report`,
+      {},
+      config,
+    ),
+
+  /** Latest AI research report (Chinese Markdown). 404 when never generated. */
+  getReport: (runId: string, config?: RequestConfig) =>
+    api.get<BacktestResearchReport>(`/backtests/${runId}/report`, config),
+}
+
+export interface BacktestResearchReport {
+  report_id: string
+  run_id: string
+  content_md: string
+  created_at: string
 }
 
 // ── Regime timeline / ranking types ─────────────────────────────────────────

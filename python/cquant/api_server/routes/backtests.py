@@ -17,7 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
-from cquant.api_server.deps import CatalogDep, run_job_async
+from cquant.api_server.deps import CatalogDep, KBServiceDep, run_job_async
 from cquant.backtest_vector.sensitivity import GridSearchSensitivity
 
 _ARTIFACTS_BASE = pathlib.Path("data/backtest_artifacts").resolve()
@@ -3477,6 +3477,263 @@ async def get_validation_suite(run_id: str, catalog: CatalogDep) -> dict:
         "steps": _parse(row.get("steps_json")),
         "created_at": str(row.get("created_at", "")),
     }
+
+
+# ── AI Research Report (Phase 4 T6) ──────────────────────────────────────────
+
+_RESEARCH_REPORT_DDL = """
+CREATE TABLE IF NOT EXISTS gold_research_reports (
+    report_id   VARCHAR PRIMARY KEY,
+    run_id      VARCHAR NOT NULL,
+    content_md  VARCHAR NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL
+)
+"""
+
+
+def _ensure_research_report_table(catalog) -> None:
+    """Create gold_research_reports if missing (idempotent)."""
+    try:
+        catalog.execute(_RESEARCH_REPORT_DDL)
+    except Exception as exc:
+        logger.debug("_ensure_research_report_table: %s", exc)
+
+
+_REPORT_METRIC_KEYS = (
+    "total_return", "annualized_return", "sharpe_ratio", "sortino_ratio",
+    "calmar_ratio", "max_drawdown", "win_rate", "annualized_volatility",
+    "information_ratio", "alpha", "beta",
+)
+
+
+def _build_report_context(catalog, run_id: str) -> tuple[dict, str]:
+    """Collect run metadata + metrics + analysis + validation checklist.
+
+    Returns (meta dict for the fallback writer, markdown context string).
+    Each section is individually tolerated-missing.
+    """
+    meta: dict = {"run_id": run_id}
+    try:
+        df = catalog.query(
+            "SELECT run_id, strategy_id, engine, status, dataset_version, "
+            "started_at, completed_at FROM gold_backtest_runs WHERE run_id = ?",
+            [run_id],
+        )
+        if not df.is_empty():
+            meta.update(df.to_dicts()[0])
+    except Exception as exc:
+        logger.warning("report context: run meta unavailable for %s: %s", run_id, exc)
+
+    metrics: dict = {}
+    mpath = _safe_metrics_path(run_id)
+    if mpath and mpath.exists():
+        try:
+            metrics = json.loads(mpath.read_text())
+        except Exception as exc:
+            logger.warning("report context: metrics unreadable for %s: %s", run_id, exc)
+    meta["metrics"] = metrics
+
+    analysis: dict = {}
+    try:
+        adf = catalog.query(
+            "SELECT psr, dsr, overall_overfit_score, summary "
+            "FROM gold_bt_analysis_runs WHERE backtest_run_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            [run_id],
+        )
+        if not adf.is_empty():
+            analysis = adf.to_dicts()[0]
+    except Exception as exc:
+        logger.debug("report context: analysis unavailable for %s: %s", run_id, exc)
+    meta["analysis"] = analysis
+
+    checklist: dict = {}
+    try:
+        cdf = catalog.query(
+            "SELECT checklist_json FROM gold_validation_suites WHERE run_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            [run_id],
+        )
+        if not cdf.is_empty():
+            raw = cdf["checklist_json"].item()
+            if isinstance(raw, str):
+                checklist = json.loads(raw)
+            elif raw is not None:
+                checklist = raw
+    except Exception as exc:
+        logger.debug("report context: validation checklist unavailable for %s: %s", run_id, exc)
+    meta["validation_checklist"] = checklist
+
+    lines = [
+        f"# 回测上下文（run_id={run_id}）",
+        f"- 策略: {meta.get('strategy_id') or '—'}（引擎 {meta.get('engine') or '—'}）",
+        f"- 数据集: {meta.get('dataset_version') or '—'}",
+        f"- 时间: {meta.get('started_at') or '—'} ~ {meta.get('completed_at') or '—'}",
+        "## 核心指标",
+    ]
+    for k in _REPORT_METRIC_KEYS:
+        v = metrics.get(k)
+        lines.append(f"- {k}: {v if v is not None else '—'}")
+    if analysis:
+        lines.append("## 过拟合分析（若已有）")
+        lines.append(
+            f"- PSR: {analysis.get('psr')}  DSR: {analysis.get('dsr')}  "
+            f"过拟合得分: {analysis.get('overall_overfit_score')}"
+        )
+        if analysis.get("summary"):
+            lines.append(f"- 摘要: {analysis['summary']}")
+    if checklist:
+        lines.append("## 验证套件清单（若已有）")
+        for k in ("psr_pass", "fold_stable", "sensitivity_flat", "regime_cycles_sufficient"):
+            if k in checklist:
+                lines.append(f"- {k}: {checklist[k]}")
+    return meta, "\n".join(lines)
+
+
+def _fallback_report_md(meta: dict) -> str:
+    """Deterministic Chinese markdown when no LLM provider is available."""
+    m = meta.get("metrics") or {}
+    a = meta.get("analysis") or {}
+
+    def pct(key: str) -> str:
+        v = m.get(key)
+        return "—" if v is None else f"{float(v) * 100:.2f}%"
+
+    return "\n".join([
+        "# 回测研究报告（自动生成）",
+        f"run_id: {meta.get('run_id', '')}  策略: {meta.get('strategy_id') or '—'}  "
+        f"数据集: {meta.get('dataset_version') or '—'}",
+        "## 核心指标",
+        f"- 总收益率 {pct('total_return')}，年化收益 {pct('annualized_return')}，"
+        f"Sharpe {m.get('sharpe_ratio', '—')}",
+        f"- 最大回撤 {pct('max_drawdown')}，胜率 {pct('win_rate')}，"
+        f"年化波动率 {pct('annualized_volatility')}",
+        "## 统计检验",
+        f"- PSR {a.get('psr', '—')} / DSR {a.get('dsr', '—')}（> 0.95 视为通过）",
+        "## 风险与不确定性",
+        "- 以上结果基于历史数据与成本假设回测得出，存在过拟合、市场状态切换与成本假设偏差风险。",
+        "- 本报告仅供研究参考，不构成投资建议，禁止据此执行真实交易。",
+    ])
+
+
+def _invoke_report_writer(context_md: str, meta: dict) -> str:
+    """Run the report_writer agent over the run context.
+
+    Falls back to a deterministic Chinese summary when no LLM provider is
+    configured or the agent call fails (offline-friendly).
+    """
+
+    async def _run() -> str:
+        from cquant.api_server.routes.advisor import _build_provider
+        from cquant.ai_advisor import SafetyPolicy
+        from cquant.ai_advisor.agents import ReportWriterAgent
+
+        agent = ReportWriterAgent(_build_provider(), SafetyPolicy(), max_tokens=3072)
+        turn = await agent.act(
+            context_md + "\n\n请基于以上上下文用中文撰写结构化研究报告。",
+            [],
+        )
+        return turn.content.strip()
+
+    content = ""
+    try:
+        content = asyncio.run(_run())
+    except Exception as exc:
+        logger.warning("report_writer agent failed for %s: %s — using fallback",
+                       meta.get("run_id"), exc)
+    if not content or "api key is not configured" in content.lower():
+        content = _fallback_report_md(meta)
+    return content
+
+
+def _mirror_report_to_knowledge_base(kb, report_id: str, run_id: str, content_md: str) -> bool:
+    """Persist the report markdown into the knowledge base (best-effort).
+
+    The report is written to a .md file and ingested as a research document.
+    Failure is tolerated (warning only) — DuckDB remains the source of truth.
+    """
+    try:
+        from cquant.knowledge_base.schemas.document import IngestRequest
+
+        out_dir = pathlib.Path("knowledge/raw_generated")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{report_id}.md"
+        path.write_text(content_md, encoding="utf-8")
+        kb.ingest(IngestRequest(
+            uri=str(path),
+            logical_type="research",
+            source_name="cQuant AI Advisor",
+            title=f"AI 研报 — 回测 {run_id[:12]}",
+        ))
+        return True
+    except Exception as exc:
+        logger.warning("Knowledge-base mirror failed for report %s: %s", report_id, exc)
+        return False
+
+
+@router.post("/{run_id}/report")
+async def generate_research_report(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    catalog: CatalogDep,
+    kb: KBServiceDep,
+) -> dict:
+    """触发 AI 研究报告生成（后台异步执行，job 轮询同 /analyze）。
+
+    以 run 元数据 + 核心指标 + 过拟合分析 + 验证清单为上下文调用
+    report_writer agent，产出中文 Markdown 研报；结果落 gold_research_reports
+    并尽力镜像到知识库（失败仅 warning）。
+    """
+    df = catalog.query(
+        "SELECT run_id, status FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+    )
+    if df.is_empty():
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+    if df["status"][0] != "completed":
+        raise HTTPException(status_code=422, detail="Only completed backtests can be reported")
+
+    _ensure_job_table(catalog)
+    _ensure_research_report_table(catalog)
+    job_id = str(uuid.uuid4())
+    _save_job(catalog, job_id, job_type="report", status="running", run_id=run_id)
+
+    def _run_report() -> None:
+        try:
+            _ensure_research_report_table(catalog)
+            meta, ctx_md = _build_report_context(catalog, run_id)
+            content_md = _invoke_report_writer(ctx_md, meta)
+            report_id = str(uuid.uuid4())
+            catalog.execute(
+                "INSERT INTO gold_research_reports (report_id, run_id, content_md, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                [report_id, run_id, content_md, datetime.now(tz=timezone.utc).isoformat()],
+            )
+            if not _mirror_report_to_knowledge_base(kb, report_id, run_id, content_md):
+                logger.warning("Report %s persisted to DuckDB only (KB mirror failed)", report_id)
+            _save_job(catalog, job_id, "report", "completed", run_id=run_id)
+        except Exception as exc:
+            logger.exception("Report job %s failed", job_id)
+            _save_job(catalog, job_id, "report", "failed", run_id=run_id,
+                      error=f"Report failed: {str(exc)[:200]}")
+
+    background_tasks.add_task(run_job_async, _run_report)
+    return {"job_id": job_id, "run_id": run_id, "status": "running"}
+
+
+@router.get("/{run_id}/report")
+async def get_research_report(run_id: str, catalog: CatalogDep) -> dict:
+    """返回最新一次 AI 研究报告（Markdown）。无报告时 404。"""
+    _ensure_research_report_table(catalog)
+    df = catalog.query(
+        "SELECT report_id, run_id, content_md, created_at FROM gold_research_reports "
+        "WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+        [run_id],
+    )
+    if df.is_empty():
+        raise HTTPException(status_code=404, detail=f"No research report found for run '{run_id}'")
+    row = df.to_dicts()[0]
+    row["created_at"] = str(row.get("created_at", ""))
+    return row
 
 
 # ── Calendar Analysis ───────────────────────────────────────────────────────

@@ -2412,7 +2412,8 @@
         "feature-importance": "Feature Importance",
         "model-diagnostics": "Model Diagnostics",
         "trade-analysis": "Trade Analysis",
-        "regime_timeline": "Regime Timeline"
+        "regime_timeline": "Regime Timeline",
+        "report": "AI Report"
       },
       "no_benchmark_hint": "No benchmark set",
       "validation": {
@@ -2494,6 +2495,17 @@
             "external_na": "N/A"
           }
         }
+      },
+      "report": {
+        "title": "AI Research Report",
+        "subtitle": "Generates a Chinese markdown report from this run's metrics, statistical tests (PSR/DSR) and validation checklist, mirrored to the knowledge base",
+        "generate": "Generate Research Report",
+        "generating": "Generating…",
+        "done": "Research report generated",
+        "failed": "Report generation failed",
+        "empty": "No research report yet. Click the button above and the AI will generate a Chinese markdown report from this run's context.",
+        "generated_at": "Generated at",
+        "chart_spec_note": "Note: charts inside the report are shown as spec text (inline chart rendering arrives in a later release)."
       },
       "regime": {
         "not_applicable": "No regime (market-state timing) layer on this backtest — not applicable",

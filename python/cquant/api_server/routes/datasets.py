@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from cquant.api_server.deps import CatalogDep, run_job_async
 from cquant.api_server.schemas.common import UniverseCreateBody
@@ -260,15 +260,15 @@ async def get_data_freshness(catalog: CatalogDep) -> dict:
 
 @router.get("/corporate-actions")
 async def get_corporate_actions(
-    catalog: CatalogDep, asset_id: str = "", limit: int = 200
+    catalog: CatalogDep,
+    asset_id: str = "",
+    limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict:
     """返回单只资产的公司行为历史（分红/除权），按 ex_date 升序。
 
     表可能为空或不存在——统一返回空列表不报错（数据浏览器/前端
     直接渲染）。``asset_id`` 为空时返回全表最近 ``limit`` 条。
     """
-    if limit > 1000:
-        limit = 1000
     try:
         if asset_id:
             df = catalog.query(

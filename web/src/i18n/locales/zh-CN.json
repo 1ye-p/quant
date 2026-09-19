@@ -46,10 +46,7 @@
       "tasks": "任务管理",
       "alerts": "告警中心",
       "pipeline": "自动化管道",
-      "data_browser": [
-        "数据浏览器",
-        "Data Browser"
-      ]
+      "data_browser": "数据浏览器"
     },
     "risk_policy": {
       "position_limit": "仓位限制",

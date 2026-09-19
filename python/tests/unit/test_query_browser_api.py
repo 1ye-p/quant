@@ -240,3 +240,21 @@ class TestCorporateActionsEndpoint:
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
         assert resp.json()["items"] == []
+
+    def test_limit_zero_rejected(self, client: TestClient) -> None:
+        resp = client.get(
+            "/api/v1/datasets/corporate-actions", params={"limit": 0}
+        )
+        assert resp.status_code == 422
+
+    def test_limit_negative_rejected(self, client: TestClient) -> None:
+        resp = client.get(
+            "/api/v1/datasets/corporate-actions", params={"limit": -5}
+        )
+        assert resp.status_code == 422
+
+    def test_limit_above_cap_rejected(self, client: TestClient) -> None:
+        resp = client.get(
+            "/api/v1/datasets/corporate-actions", params={"limit": 1001}
+        )
+        assert resp.status_code == 422

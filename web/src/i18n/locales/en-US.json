@@ -46,10 +46,7 @@
       "tasks": "Task Manager",
       "alerts": "Alert Center",
       "pipeline": "Automation Pipeline",
-      "data_browser": [
-        "数据浏览器",
-        "Data Browser"
-      ]
+      "data_browser": "Data Browser"
     },
     "risk_policy": {
       "position_limit": "Position Limit",

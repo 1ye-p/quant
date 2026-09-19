@@ -447,7 +447,12 @@
         "view_details": "View details",
         "view_factor_details": "View factor details",
         "select_all": "Select all",
-        "deselect_all": "Deselect all"
+        "deselect_all": "Deselect all",
+        "search_placeholder": "Search factor name or label…",
+        "selected_group": "Selected factors",
+        "status_materialized": "Materialized",
+        "status_custom": "Custom",
+        "no_matches": "No matching factors"
       },
       "factor_help_panel": {
         "close": "Close",

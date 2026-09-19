@@ -44,6 +44,65 @@ def _ensure_custom_factor_table(catalog) -> None:
         logger.debug("_ensure_custom_factor_table: %s", exc)
 
 
+_ic_summary_table_ensured = False
+
+
+def _ensure_ic_summary_table(catalog) -> None:
+    """幂等创建 IC 汇总表（进程内只执行一次）。"""
+    global _ic_summary_table_ensured
+    if _ic_summary_table_ensured:
+        return
+    try:
+        catalog.execute("""
+            CREATE TABLE IF NOT EXISTS gold_factor_ic_summary (
+                factor_name VARCHAR PRIMARY KEY,
+                ic_mean DOUBLE,
+                icir DOUBLE,
+                ic_positive_pct DOUBLE,
+                n INTEGER,
+                window_start DATE,
+                window_end DATE,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        _ic_summary_table_ensured = True
+    except Exception as exc:
+        logger.debug("_ensure_ic_summary_table: %s", exc)
+
+
+def _upsert_ic_summary(
+    catalog,
+    factor_name: str,
+    ic_mean: float,
+    icir: float,
+    ic_positive_pct: float,
+    n: int,
+    window_start: str | None,
+    window_end: str | None,
+) -> None:
+    """Upsert 单因子 IC 汇总（供 leaderboard / ic-status / ic-trend 读取）。"""
+    try:
+        _ensure_ic_summary_table(catalog)
+        catalog.execute(
+            """
+            INSERT INTO gold_factor_ic_summary
+                (factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+            ON CONFLICT (factor_name) DO UPDATE SET
+                ic_mean = excluded.ic_mean,
+                icir = excluded.icir,
+                ic_positive_pct = excluded.ic_positive_pct,
+                n = excluded.n,
+                window_start = excluded.window_start,
+                window_end = excluded.window_end,
+                updated_at = excluded.updated_at
+            """,
+            [factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end],
+        )
+    except Exception as exc:
+        logger.warning("upsert gold_factor_ic_summary failed for %s: %s", factor_name, exc)
+
+
 class CustomFactorCreateBody(BaseModel):
     name: str = Field(..., max_length=64)
     expression: str = Field(..., max_length=500)
@@ -271,22 +330,32 @@ async def create_custom_factor(body: CustomFactorCreateBody, catalog: CatalogDep
     return {"factor_id": factor_id, "name": body.name, "status": "created"}
 
 
+_QLIB_SYNTAX_RE = re.compile(r"\$|\b(Ref|Mean|Std|Rank|Corr|Delta|Sum|Max|Min|Abs|Sign|IdxMax|IdxMin)\s*\(")
+
+
+def _qlib_syntax_hint(expression: str) -> str:
+    """检测 Qlib 语法（$close / Ref(...) 大写函数）并返回提示，否则空字符串。"""
+    if _QLIB_SYNTAX_RE.search(expression):
+        return "（检测到 Qlib 语法，本编辑器使用小写 DSL，例如 $close/Ref(close,20) 应写作 ref(close,20)）"
+    return ""
+
+
 @router.post("/custom/preview")
 async def preview_custom_factor(body: CustomFactorPreviewBody, catalog: CatalogDep) -> dict:
-    """预览自定义因子：用最近 30 天样本数据试算，返回前10行结果。"""
+    """预览自定义因子：用数据中最近交易日回溯 30 天的样本试算，返回前10行结果。"""
     import polars as pl
     from cquant.factorlab.factors.expression_factor import ExpressionFactor
 
     # Syntax-only check first (before loading sample data)
     syntax_check = ExpressionFactor.validate_expression(body.expression)
     if not syntax_check["valid"]:
-        return {"valid": False, "error": syntax_check["error"], "preview": []}
+        return {"valid": False, "error": syntax_check["error"] + _qlib_syntax_hint(body.expression), "preview": []}
 
     try:
         sample_df = catalog.query(
             "SELECT asset_id, trade_date, open, high, low, close, volume, amount "
             "FROM silver_prices_1d "
-            "WHERE trade_date >= CURRENT_DATE - INTERVAL '30 days' "
+            "WHERE trade_date >= (SELECT max(trade_date) - INTERVAL '30 days' FROM silver_prices_1d) "
             "ORDER BY asset_id, trade_date "
             "LIMIT 50"
         )
@@ -299,7 +368,7 @@ async def preview_custom_factor(body: CustomFactorPreviewBody, catalog: CatalogD
     # Runtime check with real data (subsumes syntax check, so no need to repeat)
     runtime_check = ExpressionFactor.validate_expression(body.expression, sample_df)
     if not runtime_check["valid"]:
-        return {"valid": False, "error": runtime_check["error"], "preview": []}
+        return {"valid": False, "error": runtime_check["error"] + _qlib_syntax_hint(body.expression), "preview": []}
 
     factor = ExpressionFactor("__preview__", body.expression)
     result = factor.compute(sample_df, None)  # type: ignore
@@ -554,6 +623,18 @@ def _compute_ic(job_id: str, body: ICComputeBody, catalog: CatalogDep) -> None:
             "UPDATE meta_factor_analytics SET status = 'done', series_json = ?, summary_json = ?, completed_at = ? WHERE job_id = ?",
             [json.dumps(series), json.dumps(summary), datetime.now(tz=timezone.utc).isoformat(), job_id],
         )
+
+        # 落 IC 汇总表（供 ic-leaderboard / ic-status / ic-trend 读取）
+        _upsert_ic_summary(
+            catalog,
+            body.factor_name,
+            float(summary["mean_ic"]),
+            float(summary["ir"]),
+            float(summary["hit_rate"]),
+            int(summary["observations"]),
+            series[0]["trade_date"] if series else None,
+            series[-1]["trade_date"] if series else None,
+        )
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("IC compute job %s failed: %s", job_id, error_msg)
@@ -668,6 +749,19 @@ def _compute_ic_matrix(job_id: str, body: ICMatrixBody, catalog: CatalogDep) -> 
             "UPDATE meta_factor_analytics SET status = 'done', series_json = ?, summary_json = ?, completed_at = ? WHERE job_id = ?",
             [json.dumps([]), json.dumps(summary), datetime.now(tz=timezone.utc).isoformat(), job_id],
         )
+
+        # 落 IC 汇总表（每个因子一条）
+        for fn, stats in factor_stats.items():
+            _upsert_ic_summary(
+                catalog,
+                fn,
+                float(stats["mean_ic"]),
+                float(stats["ir"]),
+                float(stats["hit_rate"]),
+                len(all_dates),
+                all_dates[0] if all_dates else None,
+                all_dates[-1] if all_dates else None,
+            )
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("IC matrix job %s failed: %s", job_id, error_msg)
@@ -939,20 +1033,22 @@ def _compute_correlation_sync(body: QuickCorrelationBody, catalog) -> dict:
 @router.get("/ic-leaderboard")
 async def ic_leaderboard(catalog: CatalogDep, limit: int = 5) -> dict:
     """返回 IC 绝对值最高的 Top N 因子（用于 Dashboard 排行榜）。"""
+    _ensure_ic_summary_table(catalog)
     try:
         df = catalog.query(
-            "SELECT factor_name, mean_ic, ir, hit_rate, feature_set_version "
+            "SELECT factor_name, ic_mean, icir, ic_positive_pct, n, "
+            "window_start, window_end, updated_at "
             "FROM gold_factor_ic_summary "
-            "WHERE mean_ic IS NOT NULL "
-            "ORDER BY ABS(mean_ic) DESC LIMIT ?",
+            "WHERE ic_mean IS NOT NULL "
+            "ORDER BY ABS(ic_mean) DESC LIMIT ?",
             [limit],
         )
         if df.is_empty():
-            return {"items": []}
+            return {"items": [], "message": "尚无 IC 计算，请先在「因子研究」页面对因子计算 IC"}
         return {"items": df.to_dicts()}
     except Exception as exc:
-        logger.debug("ic-leaderboard query failed: %s", exc)
-        return {"items": []}
+        logger.warning("ic-leaderboard query failed: %s", exc)
+        return {"items": [], "message": f"IC 汇总表读取失败: {exc}"}
 
 
 @router.get("/ic-status")
@@ -963,48 +1059,45 @@ async def factor_ic_status(
     window_days: int = 20,
 ) -> dict:
     """批量检查因子 IC 状态，返回哪些因子 IC 低于阈值。"""
-    if not feature_set_version:
-        # Try to get the latest feature_set_version
-        try:
-            ver_df = catalog.query(
-                "SELECT DISTINCT feature_set_version FROM gold_factor_ic_summary "
-                "ORDER BY computed_at DESC LIMIT 1"
-            )
-            if ver_df.is_empty():
-                return {"items": [], "threshold": threshold, "window_days": window_days}
-            feature_set_version = ver_df["feature_set_version"][0]
-        except Exception:
-            return {"items": [], "threshold": threshold, "window_days": window_days}
-
+    _ensure_ic_summary_table(catalog)
+    empty_resp = {
+        "items": [],
+        "threshold": threshold,
+        "window_days": window_days,
+        "message": "尚无 IC 计算，请先在「因子研究」页面对因子计算 IC",
+    }
     try:
-        # Get latest IC summary for each factor
+        # 汇总表按 factor_name 主键，每因子一行最新结果；按窗口过滤 updated_at
         df = catalog.query(
-            "SELECT factor_name, mean_ic, ir, hit_rate, computed_at "
+            "SELECT factor_name, ic_mean, icir, ic_positive_pct, n, updated_at "
             "FROM gold_factor_ic_summary "
-            "WHERE feature_set_version = ? "
-            "  AND computed_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 DAY') "
-            "ORDER BY factor_name, computed_at DESC",
-            [feature_set_version, window_days],
+            "WHERE updated_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 DAY') "
+            "ORDER BY factor_name",
+            [window_days],
         )
         if df.is_empty():
-            return {"items": [], "threshold": threshold, "window_days": window_days}
-
-        # Keep latest per factor
-        latest = {}
-        for row in df.to_dicts():
-            fn = row["factor_name"]
-            if fn not in latest:
-                latest[fn] = row
+            # 窗口外还有数据时给出不同提示
+            try:
+                any_df = catalog.query("SELECT COUNT(*) AS cnt FROM gold_factor_ic_summary")
+                if not any_df.is_empty() and any_df["cnt"][0] > 0:
+                    empty_resp = {
+                        **empty_resp,
+                        "message": f"近 {window_days} 天内无 IC 更新（表中有历史数据，请扩大 window_days 或重新计算）",
+                    }
+            except Exception:
+                pass
+            return empty_resp
 
         items = []
-        for fn, row in latest.items():
-            ic = float(row["mean_ic"]) if row["mean_ic"] is not None else 0.0
+        for row in df.to_dicts():
+            fn = row["factor_name"]
+            ic = float(row["ic_mean"]) if row["ic_mean"] is not None else 0.0
             is_alert = abs(ic) < threshold
             items.append({
                 "factor_name": fn,
                 "mean_ic": round(ic, 6),
-                "ir": round(float(row["ir"]), 4) if row["ir"] is not None else None,
-                "hit_rate": round(float(row["hit_rate"]), 4) if row["hit_rate"] is not None else None,
+                "ir": round(float(row["icir"]), 4) if row["icir"] is not None else None,
+                "hit_rate": round(float(row["ic_positive_pct"]), 4) if row["ic_positive_pct"] is not None else None,
                 "is_alert": is_alert,
                 "alert_message": f"IC 绝对值 {abs(ic):.4f} < 阈值 {threshold}" if is_alert else None,
             })
@@ -1012,7 +1105,7 @@ async def factor_ic_status(
         # Sort: alert factors first, then by abs(IC) ascending
         items.sort(key=lambda x: (not x["is_alert"], abs(x["mean_ic"])))
 
-        return {"items": items, "threshold": threshold, "window_days": window_days, "feature_set_version": feature_set_version}
+        return {"items": items, "threshold": threshold, "window_days": window_days}
     except Exception as exc:
         logger.warning("factor_ic_status failed: %s", exc)
         return {"items": [], "threshold": threshold, "window_days": window_days, "error": str(exc)}
@@ -1176,10 +1269,10 @@ async def get_ic_trend(catalog: CatalogDep, days: int = 30) -> dict:
     """返回近 N 天每日 IC 均值趋势。"""
     try:
         df = catalog.query(
-            "SELECT DATE(computed_at) as date, AVG(ABS(mean_ic)) as avg_ic "
+            "SELECT DATE(updated_at) as date, AVG(ABS(ic_mean)) as avg_ic "
             "FROM gold_factor_ic_summary "
-            "WHERE computed_at >= CURRENT_DATE - ? * INTERVAL '1 DAY' "
-            "GROUP BY DATE(computed_at) "
+            "WHERE updated_at >= CURRENT_DATE - ? * INTERVAL '1 DAY' "
+            "GROUP BY DATE(updated_at) "
             "ORDER BY date",
             [days],
         )

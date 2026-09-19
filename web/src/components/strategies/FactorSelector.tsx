@@ -19,6 +19,7 @@ export function FactorSelector({ selected, onChange }: FactorSelectorProps) {
   const { t } = useTranslation()
   const [helpFactor, setHelpFactor] = useState<AvailableFactor | null>(null)
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
+  const [search, setSearch] = useState('')
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['factors', 'available'],
@@ -30,6 +31,36 @@ export function FactorSelector({ selected, onChange }: FactorSelectorProps) {
   const factorMap = useMemo(
     () => new Map((data?.factors ?? []).map(f => [f.name, f])),
     [data?.factors],
+  )
+
+  const normalizedSearch = search.trim().toLowerCase()
+
+  const matchesSearch = (factor: AvailableFactor) =>
+    !normalizedSearch ||
+    factor.name.toLowerCase().includes(normalizedSearch) ||
+    (factor.label_zh ?? '').includes(normalizedSearch) ||
+    (factor.label_en ?? '').toLowerCase().includes(normalizedSearch)
+
+  /** 组内排序：已选置顶 → 已物化优先 → 名称。 */
+  const sortFactors = (factors: AvailableFactor[]) =>
+    [...factors].sort((a, b) => {
+      const aSel = selected.includes(a.name) ? 0 : 1
+      const bSel = selected.includes(b.name) ? 0 : 1
+      if (aSel !== bSel) return aSel - bSel
+      const aMat = a.status === 'materialized' ? 0 : 1
+      const bMat = b.status === 'materialized' ? 0 : 1
+      if (aMat !== bMat) return aMat - bMat
+      return a.name.localeCompare(b.name)
+    })
+
+  const selectedFactors = useMemo(
+    () =>
+      selected
+        .map(name => factorMap.get(name))
+        .filter((f): f is AvailableFactor => f != null)
+        .filter(matchesSearch),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, factorMap, normalizedSearch],
   )
 
   const toggleCategory = (category: string) => {
@@ -85,14 +116,101 @@ export function FactorSelector({ selected, onChange }: FactorSelectorProps) {
 
   if (!data) return null
 
+  const renderFactorRow = (factor: AvailableFactor) => (
+    <div key={factor.name} className="flex items-center px-4 py-2 hover:bg-blue-50">
+      <label className="flex items-center gap-3 flex-1 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={selected.includes(factor.name)}
+          onChange={() => toggleFactor(factor.name)}
+          className="rounded"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-700">
+              {factor.label_zh}
+            </span>
+            <span className="text-xs text-gray-400 font-mono">
+              {factor.name}
+            </span>
+            {factor.status === 'materialized' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+                {t('component.strategies.factor_selector.status_materialized')}
+              </span>
+            )}
+            {factor.is_custom && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">
+                {t('component.strategies.factor_selector.status_custom')}
+              </span>
+            )}
+          </div>
+        </div>
+      </label>
+      <button
+        className="text-xs text-gray-400 hover:text-blue-600 ml-2"
+        onClick={() => setHelpFactor(factor)}
+        title={t('component.strategies.factor_selector.view_details')}
+        aria-label={t('component.strategies.factor_selector.view_factor_details')}
+      >
+        ⓘ
+      </button>
+    </div>
+  )
+
+  const filteredCategories = data.categories
+    .map(category => ({
+      ...category,
+      factors: category.factors.filter(name => {
+        const f = factorMap.get(name)
+        return f != null && matchesSearch(f)
+      }),
+    }))
+    .filter(category => category.factors.length > 0)
+
   return (
     <div className="space-y-3">
+      {/* Search box */}
+      <input
+        type="text"
+        className="input w-full"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder={t('component.strategies.factor_selector.search_placeholder')}
+      />
+
       <div className="border rounded-lg divide-y">
-        {data.categories.map(category => {
+        {/* Pinned selected factors (top) */}
+        {selectedFactors.length > 0 && (
+          <div>
+            <div className="px-3 py-2 bg-blue-50">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-blue-800">
+                  {t('component.strategies.factor_selector.selected_group')}
+                </span>
+                <span className="text-xs text-blue-500">
+                  ({selectedFactors.length})
+                </span>
+                <button
+                  className="text-xs text-blue-600 hover:text-blue-800 ml-auto px-2 py-1"
+                  onClick={() => onChange(selected.filter(f => !factorMap.has(f) || !matchesSearch(factorMap.get(f)!)))}
+                >
+                  {t('component.strategies.factor_selector.deselect_all')}
+                </button>
+              </div>
+            </div>
+            <div className="divide-y">
+              {selectedFactors.map(renderFactorRow)}
+            </div>
+          </div>
+        )}
+
+        {filteredCategories.map(category => {
           const isExpanded = expandedCategories.has(category.name)
-          const categoryFactors = category.factors
-            .map(name => factorMap.get(name))
-            .filter((f): f is AvailableFactor => f != null)
+          const categoryFactors = sortFactors(
+            category.factors
+              .map(name => factorMap.get(name))
+              .filter((f): f is AvailableFactor => f != null)
+          )
           const selectedInCategory = categoryFactors.filter(f => selected.includes(f.name))
 
           return (
@@ -131,41 +249,18 @@ export function FactorSelector({ selected, onChange }: FactorSelectorProps) {
               {/* Factor list */}
               {isExpanded && (
                 <div className="divide-y">
-                  {categoryFactors.map(factor => (
-                    <div key={factor.name} className="flex items-center px-4 py-2 hover:bg-blue-50">
-                      <label className="flex items-center gap-3 flex-1 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(factor.name)}
-                          onChange={() => toggleFactor(factor.name)}
-                          className="rounded"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-gray-700">
-                              {factor.label_zh}
-                            </span>
-                            <span className="text-xs text-gray-400 font-mono">
-                              {factor.name}
-                            </span>
-                          </div>
-                        </div>
-                      </label>
-                      <button
-                        className="text-xs text-gray-400 hover:text-blue-600 ml-2"
-                        onClick={() => setHelpFactor(factor)}
-                        title={t('component.strategies.factor_selector.view_details')}
-                        aria-label={t('component.strategies.factor_selector.view_factor_details')}
-                      >
-                        ⓘ
-                      </button>
-                    </div>
-                  ))}
+                  {categoryFactors.map(renderFactorRow)}
                 </div>
               )}
             </div>
           )
         })}
+
+        {filteredCategories.length === 0 && selectedFactors.length === 0 && (
+          <div className="px-4 py-6 text-center text-sm text-gray-400">
+            {t('component.strategies.factor_selector.no_matches')}
+          </div>
+        )}
       </div>
 
       {/* Help panel */}

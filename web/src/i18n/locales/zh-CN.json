@@ -447,7 +447,12 @@
         "view_details": "查看详情",
         "view_factor_details": "查看因子详情",
         "select_all": "全选",
-        "deselect_all": "取消全选"
+        "deselect_all": "取消全选",
+        "search_placeholder": "搜索因子名称 / 中文标签…",
+        "selected_group": "已选因子",
+        "status_materialized": "已物化",
+        "status_custom": "自定义",
+        "no_matches": "无匹配因子"
       },
       "factor_help_panel": {
         "close": "关闭",

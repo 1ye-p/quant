@@ -96,15 +96,15 @@ def check_factor_ic_low(catalog, rule_id: str, params: dict) -> bool:
         return False
     try:
         df = catalog.query(
-            "SELECT mean_ic FROM gold_factor_ic_summary "
+            "SELECT ic_mean FROM gold_factor_ic_summary "
             "WHERE factor_name = ? "
-            "  AND computed_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 DAY') "
-            "ORDER BY computed_at DESC LIMIT 1",
+            "  AND updated_at >= CURRENT_TIMESTAMP - (? * INTERVAL '1 DAY') "
+            "ORDER BY updated_at DESC LIMIT 1",
             [factor_name, window_days],
         )
         if df.is_empty():
             return False
-        ic = float(df["mean_ic"][0])
+        ic = float(df["ic_mean"][0])
         if abs(ic) < threshold:
             _save_alert(catalog, rule_id, "factor_ic_low",
                         f"因子 {factor_name} IC 绝对值 {abs(ic):.4f} 低于阈值 {threshold}（近{window_days}日）",

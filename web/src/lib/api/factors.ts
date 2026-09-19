@@ -22,6 +22,8 @@ export interface AvailableFactor {
   formula: string
   economic_meaning: string
   use_case: string
+  status?: 'materialized' | 'ready' | 'reference'
+  is_custom?: boolean
 }
 
 export interface FactorCategory {

@@ -31,7 +31,8 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
   const [datasetVersion, setDatasetVersion] = useState('')
   const [universeId, setUniverseId] = useState(parsed.universe_id ?? 'all')
   const [customAssets, setCustomAssets] = useState('')
-  const [benchmarkId, setBenchmarkId] = useState('')
+  // UI 预选沪深300（服务端不做静默默认，用户可显式切回"无基准"）
+  const [benchmarkId, setBenchmarkId] = useState('SSE:000300')
   const [scoringRunId, setScoringRunId] = useState('')
   const [scoringWarning, setScoringWarning] = useState('')
   const [mlModelVersion, setMlModelVersion] = useState(

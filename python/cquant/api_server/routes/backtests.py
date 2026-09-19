@@ -320,11 +320,15 @@ async def create_backtest(
         parsed.get("factors", ["ret_20d"])[0] if parsed.get("factors") else "ret_20d"
     )
 
-    # MultiFactor weights: request body first, then strategy config (UI stores
-    # factor_weights here). None for legacy strategies → engine falls back to
-    # the historical {sort_factor: 1.0} behavior.
+    # MultiFactor weights: strategy config first (UI stores factor_weights
+    # here as part of the saved config); an explicit non-None body value
+    # overrides for a single run (including {} which is then rejected by
+    # validation). None for legacy strategies → engine falls back to the
+    # historical {sort_factor: 1.0} behavior.
     cfg_factors = list(parsed.get("factors", []))
-    factor_weights_raw = body.factor_weights or parsed.get("factor_weights")
+    factor_weights_raw = parsed.get("factor_weights")
+    if body.factor_weights is not None:
+        factor_weights_raw = body.factor_weights
     try:
         factor_weights = _validate_factor_weights(factor_weights_raw, cfg_factors)
     except ValueError as e:

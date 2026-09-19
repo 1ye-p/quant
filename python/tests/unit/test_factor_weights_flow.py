@@ -127,3 +127,103 @@ class caplog_context:
         self.logger.handle = self.orig
         assert self.records, "expected a log record for invalid factor_weights keys"
         return False
+
+
+# ── Route-level wiring tests (config priority + explicit-body override) ──────
+
+import json
+
+import polars as pl
+from fastapi import BackgroundTasks, HTTPException
+from fastapi.testclient import TestClient
+
+import cquant.api_server.routes.backtests as bt_routes
+
+
+CFG_WEIGHTS = {"factor_a": 0.5, "factor_b": 0.3, "factor_c": 0.2}
+CFG_JSON = json.dumps({
+    "strategy_type": "MultiFactor",
+    "factors": ["factor_a", "factor_b", "factor_c"],
+    "factor_weights": CFG_WEIGHTS,
+})
+
+
+class _StubCatalog:
+    """Catalog stub: 1st query returns the strategy config, later queries empty."""
+
+    def __init__(self):
+        self._first = True
+
+    def query(self, sql, params=None):
+        if self._first and "meta_strategy_configs" in sql:
+            self._first = False
+            return pl.DataFrame({"parsed_config": [CFG_JSON]})
+        return pl.DataFrame()
+
+    def execute(self, *a, **kw):
+        return None
+
+
+def _body(**kwargs):
+    base = dict(
+        strategy_id="mf_test",
+        dataset_version="test_ds",
+        start_date="2025-01-01",
+        end_date="2025-06-30",
+        strategy_type="MultiFactor",
+        sort_factor="factor_a",
+    )
+    base.update(kwargs)
+    return bt_routes.BacktestCreateBody(**base)
+
+
+@pytest.fixture()
+def _route_env(monkeypatch):
+    """Neutralize persistence/side effects; capture the spec reaching the engine."""
+    captured: dict = {}
+
+    def _fake_run_backtest(catalog, spec):
+        captured["spec"] = spec
+        return "run_1"
+
+    monkeypatch.setattr(bt_routes, "_run_backtest", _fake_run_backtest)
+    monkeypatch.setattr(bt_routes, "_ensure_schema_extensions", lambda cat: None)
+    monkeypatch.setattr(bt_routes, "_ensure_job_table", lambda cat: None)
+    monkeypatch.setattr(bt_routes, "_save_job", lambda *a, **kw: None)
+    return captured
+
+
+def _run_route(body) -> dict:
+    """Invoke the create_backtest route function directly; run the background job."""
+    import asyncio
+
+    bt = BackgroundTasks()
+    result = asyncio.run(bt_routes.create_backtest(body, bt, _StubCatalog()))
+    assert result["status"] == "running"
+    # Execute the queued job synchronously (spec capture happens in _run_backtest).
+    # tasks[0].func == run_job_async (coroutine wrapper); args[0] is the _run_job closure.
+    for task in bt.tasks:
+        task.args[0]()
+    return result
+
+
+def test_route_config_priority(_route_env):
+    """策略配置有 factor_weights 时，body 不传 → 用配置值；body 显式传 → 覆盖。"""
+    captured = _route_env
+
+    # body 不传 factor_weights → 用策略配置值
+    _run_route(_body())
+    assert captured["spec"].factor_weights == CFG_WEIGHTS
+
+    # body 显式传（非 None）→ 单次运行覆盖配置
+    override = {"factor_a": 0.2, "factor_b": 0.2, "factor_c": 0.6}
+    _run_route(_body(factor_weights=override))
+    assert captured["spec"].factor_weights == override
+
+
+def test_route_empty_dict_rejected(_route_env):
+    """body 显式 factor_weights={} → 400（非静默回退到策略配置）。"""
+    with pytest.raises(HTTPException) as exc_info:
+        _run_route(_body(factor_weights={}))
+    assert exc_info.value.status_code == 400
+    assert "不能为空" in exc_info.value.detail

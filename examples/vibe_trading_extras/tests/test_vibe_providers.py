@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from cquant.vibe_bridge.providers import (
+from providers import (
     get_provider_config,
     list_vibe_providers,
     load_vibe_providers,

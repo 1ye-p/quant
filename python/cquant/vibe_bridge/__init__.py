@@ -16,15 +16,6 @@ def __getattr__(name: str):
     if name == "VibeFactor":
         from cquant.vibe_bridge.alpha_zoo import VibeFactor
         return VibeFactor
-    if name == "VibSwarmLoader":
-        from cquant.vibe_bridge.swarm import VibSwarmLoader
-        return VibSwarmLoader
-    if name == "load_vibe_providers":
-        from cquant.vibe_bridge.providers import load_vibe_providers
-        return load_vibe_providers
-    if name == "list_vibe_providers":
-        from cquant.vibe_bridge.providers import list_vibe_providers
-        return list_vibe_providers
     raise AttributeError(f"module 'cquant.vibe_bridge' has no attribute {name!r}")
 
 
@@ -34,7 +25,7 @@ __all__ = [
     "require_vibe",
     "load_zoo",
     "VibeFactor",
-    "VibSwarmLoader",
-    "load_vibe_providers",
-    "list_vibe_providers",
 ]
+
+# 注：VibSwarmLoader / load_vibe_providers / list_vibe_providers 已移至
+# examples/vibe_trading_extras/（未接线、不在主依赖路径，见该目录 README）。

@@ -16,7 +16,7 @@ cQuant 是一个自用的量化研究平台，将数据接入、因子挖掘、�
 
 - **数据层**：DuckDB 三层数据仓库（Bronze / Silver / Gold），支持 TDX、Tushare、AKShare、Yahoo Finance 多数据源
 - **因子库**：526+ 内置因子（cQuant 原生 20+、Qlib Alpha158 50+、Vibe-Trading Alpha101 101 + 国泰君安 191 + Qlib158 扩展 154），声明式 DSL + DAG 执行引擎
-- **开源桥接**：`qlib_bridge/` 封装 Qlib 数据/评估/因子接口，`vibe_bridge/` 封装 Vibe-Trading Alpha 因子/Swarm 团队/LLM 供应商，外部模块只调用 bridge，不直接依赖上游 API
+- **开源桥接**：`qlib_bridge/` 封装 Qlib 数据/评估/因子接口，`vibe_bridge/` 封装 Vibe-Trading Alpha 因子，外部模块只调用 bridge，不直接依赖上游 API（Swarm 团队/LLM 供应商适配未接线，已移至 `examples/vibe_trading_extras/`）
 - **回测引擎**：向量化回测（含 A 股印花税、涨跌停规则、T+1 结算）+ 事件驱动引擎（Rust pyo3）+ 异步回测（BackgroundTasks + job_id 轮询）
 - **策略模板**：行业轮动、市场中性、ML Model 策略、复合策略，支持信号校验与滑点模拟
 - **过拟合检测**：PSR / DSR / CPCV / Walk-Forward 统计验证，基于 Bailey & Lopez de Prado 方法
@@ -56,7 +56,7 @@ cQuant/
 │   ├── api_server/          # FastAPI 服务（REST + SSE 异步回测）
 │   ├── mcp_server/          # MCP 工具服务（DuckDB + AKShare 数据查询）
 │   ├── qlib_bridge/         # Qlib 封装层（数据适配/评估/Alpha158 因子集）
-│   ├── vibe_bridge/         # Vibe-Trading 封装层（Alpha 因子/Swarm/LLM 供应商）
+│   ├── vibe_bridge/         # Vibe-Trading 封装层（Alpha 因子；Swarm/LLM 供应商见 examples/vibe_trading_extras/）
 │   └── cli/                 # 命令行工具
 ├── rust/                    # Rust 高性能核心（git submodule → github.com/1ye-p/quant-rust）
 │   └── crates/
@@ -289,12 +289,12 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 |------|------|
 | 数据存储 | DuckDB + Apache Parquet |
 | 数值计算 | Polars + NumPy |
-| 量化框架 | Microsoft Qlib（Alpha158 因子集） + Vibe-Trading（526 Alpha 因子 + Swarm Teams） |
+| 量化框架 | Microsoft Qlib（Alpha158 因子集） + Vibe-Trading（526 Alpha 因子；Swarm Teams 为可选 extras） |
 | ML 框架 | XGBoost / LightGBM + MLflow |
 | Web 框架 | FastAPI + Pydantic v2 |
 | 前端 | React 18 + Vite + TanStack Query + TradingView lightweight-charts |
 | 高性能核心 | Rust + PyO3 / maturin |
-| AI Provider | Claude (Anthropic) / GPT-4o (OpenAI) + 14 LLM 供应商（via Vibe-Trading） |
+| AI Provider | Claude (Anthropic) / GPT-4o (OpenAI)（14 LLM 供应商适配见 examples/vibe_trading_extras/，未接线） |
 | MCP 工具 | FastMCP Server（DuckDB + AKShare 数据查询） |
 | 向量检索 | LanceDB（可选） |
 | 部署 | Docker + docker-compose |
@@ -316,7 +316,7 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 | 版本 | 状态 | 说明 |
 |------|------|------|
 | Phase 0 | ✅ 完成 | Qlib 子模块集成：qlib_bridge 封装层（_compat/数据适配/评估器/因子集）、Alpha158 因子 |
-| Phase 0-B | ✅ 完成 | Vibe-Trading 子模块集成：vibe_bridge（526 因子/Swarm 团队/14 LLM 供应商） |
+| Phase 0-B | ✅ 完成 | Vibe-Trading 子模块集成：vibe_bridge（526 因子；Swarm/LLM 供应商未接线，后移至 `examples/vibe_trading_extras/`） |
 | Phase 1 | ✅ 完成 | 核心模块、数据层、因子、回测、CLI + UI Bug 修复 |
 | Phase 2 | ✅ 完成 | ML Lab、Newsflow、Rust 核心、过拟合检测 + 异步回测/扩展指标 |
 | Phase 3 | ✅ 完成 | 知识库 RAG、AI Advisor、API Server、Web UI + 因子研究/ML 打通 |

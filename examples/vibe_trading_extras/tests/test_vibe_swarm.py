@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from cquant.vibe_bridge.swarm import VibSwarmLoader
+from swarm import VibSwarmLoader
 
 
 def test_list_presets():

@@ -1,4 +1,4 @@
-"""cquant.vibe_bridge.providers — Vibe-Trading LLM 供应商适配器。
+"""Vibe-Trading LLM provider extras (moved from cquant.vibe_bridge.providers) — Vibe-Trading LLM 供应商适配器。
 
 读取 Vibe-Trading 的 llm_providers.json 配置，转为 cQuant LLMProvider 可用格式。
 """
@@ -14,7 +14,7 @@ from cquant.vibe_bridge._compat import require_vibe
 
 logger = logging.getLogger(__name__)
 
-_VIBE_AGENT_ROOT = Path(__file__).resolve().parents[3] / "lib" / "vibe-trading" / "agent"
+_VIBE_AGENT_ROOT = Path(__file__).resolve().parents[2] / "lib" / "vibe-trading" / "agent"
 _VIBE_PROVIDERS_JSON = _VIBE_AGENT_ROOT / "src" / "providers" / "llm_providers.json"
 
 

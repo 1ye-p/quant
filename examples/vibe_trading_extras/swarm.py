@@ -1,4 +1,4 @@
-"""cquant.vibe_bridge.swarm — Vibe-Trading Swarm 团队配置加载器。
+"""Vibe-Trading Swarm extras (moved from cquant.vibe_bridge.swarm) — Vibe-Trading Swarm 团队配置加载器。
 
 将 Vibe-Trading 的 YAML 预置团队配置转为 cQuant ai_advisor 可用的格式。
 """
@@ -15,7 +15,7 @@ from cquant.vibe_bridge._compat import require_vibe
 
 logger = logging.getLogger(__name__)
 
-_VIBE_AGENT_ROOT = Path(__file__).resolve().parents[3] / "lib" / "vibe-trading" / "agent"
+_VIBE_AGENT_ROOT = Path(__file__).resolve().parents[2] / "lib" / "vibe-trading" / "agent"
 _VIBE_PRESETS_ROOT = _VIBE_AGENT_ROOT / "src" / "swarm" / "presets"
 
 

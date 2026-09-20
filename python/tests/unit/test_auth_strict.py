@@ -51,6 +51,16 @@ class TestDevMode:
         resp = client.get("/api/v1/datasets")
         assert resp.status_code == 200
 
+    def test_trading_endpoint_dev_mode_still_503(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        """dev 模式 + 无 key + 交易端点 → 503（安全关键：dev 只放行非交易端点）。"""
+        monkeypatch.delenv("CQUANT_API_KEY", raising=False)
+        monkeypatch.setenv("CQUANT_AUTH_MODE", "dev")
+        resp = client.get("/api/v1/trading/account")
+        assert resp.status_code == 503
+        assert "CQUANT_API_KEY" in resp.json()["detail"]
+
 
 class TestKeySet:
     def test_correct_key_passes(self, client: TestClient, monkeypatch) -> None:

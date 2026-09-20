@@ -7,6 +7,7 @@ import { mlApi, backtestsApi, scoringApi, alertsApi, jobsApi } from '@/lib/api'
 import { elapsedStr } from '@/lib/utils'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { LanguageSwitcher } from '@/components/common/LanguageSwitcher'
+import { CommandPalette } from '@/components/common/CommandPalette'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useWorkflowStore } from '@/stores/workflowStore'
@@ -84,6 +85,8 @@ export function AppLayout() {
   // One-time onboarding banner: only shown until the user completes or skips
   // the /welcome demo guide (state persisted via localStorage).
   const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded())
+  // Global command palette (Cmd+K / Ctrl+K)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const queryClient = useQueryClient()
   const location = useLocation()
   const { mode, toggle: toggleTheme } = useThemeStore()
@@ -190,6 +193,18 @@ export function AppLayout() {
     document.addEventListener('click', handler)
     return () => document.removeEventListener('click', handler)
   }, [taskDropdownOpen])
+
+  // Global Cmd+K / Ctrl+K shortcut for the command palette
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen(o => !o)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const { data: alertUnread } = useQuery({
     queryKey: ['alerts', 'unread-count'],
@@ -484,6 +499,8 @@ export function AppLayout() {
             </Suspense>
           </main>
         </div>
+
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   )
 }

@@ -200,6 +200,33 @@
         "en-US": "English"
       }
     },
+    "command_palette": {
+      "title": "Command Palette",
+      "placeholder": "Search pages, factors, strategies or run an action…",
+      "no_results": "No matching results",
+      "hint_navigate": "Navigate",
+      "hint_execute": "Run",
+      "hint_close": "Close",
+      "page": {
+        "welcome": "Onboarding Guide",
+        "backtests_compare": "Backtest Compare",
+        "external_indicators": "External Indicators Import"
+      },
+      "group": {
+        "recent": "Recent",
+        "pages": "Pages",
+        "factors": "Factors",
+        "strategies": "Strategies",
+        "backtests": "Backtests",
+        "actions": "Actions"
+      },
+      "action": {
+        "new_backtest": "New Backtest",
+        "import_indicators": "Import External Indicators",
+        "toggle_language": "Switch Language / 切换语言",
+        "toggle_theme": "Toggle Theme"
+      }
+    },
     "sizer": {
       "equal_weight": {
         "name": "Equal Weight",

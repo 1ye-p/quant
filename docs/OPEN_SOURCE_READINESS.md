@@ -36,7 +36,7 @@
 ## 四、已知缺口（不阻塞开源，收录入 backlog）
 
 1. 行为准则（CODE_OF_CONDUCT.md）不存在——CONTRIBUTING 中暂不链接，开源后按社区惯例补充。
-2. `web/e2e/*.spec.ts`（Playwright）存在被 vitest 误拾取的风险（见 backlog #3）。
+2. `web/e2e/*.spec.ts`（Playwright）存在被 vitest 误拾取的风险（见 backlog #4）。
 3. `LICENSE` 已存在（类型见文件本身）；若计划采用双重许可（核心 + Rust 子模块），发布前确认各 LICENSE 头一致。
 
 ---

@@ -8,7 +8,7 @@
 
 ```bash
 git clone --recurse-submodules <repo-url>
-cd quant
+cd cQuant
 git submodule update --init --recursive
 ./scripts/bootstrap_dev.sh
 conda activate cQuanty

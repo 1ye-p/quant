@@ -948,6 +948,23 @@ async def best_recent_backtest(catalog: CatalogDep, days: int = 7) -> dict:
     return best or {"run_id": None, "strategy_id": None, "sharpe": None, "max_drawdown": None, "cagr": None}
 
 
+def _infer_strategy_type(catalog, strategy_id: str) -> str:
+    """Fallback strategy_type lookup from meta_strategy_configs (legacy runs)."""
+    if not strategy_id:
+        return ""
+    try:
+        df = catalog.query(
+            "SELECT parsed_config FROM meta_strategy_configs WHERE strategy_id = ?",
+            [strategy_id],
+        )
+        if df.is_empty() or df["parsed_config"].item() is None:
+            return ""
+        parsed = json.loads(df["parsed_config"].item())
+        return parsed.get("strategy_type", "") or ""
+    except Exception:
+        return ""
+
+
 @router.get("/{run_id}")
 async def get_backtest(run_id: str, catalog: CatalogDep) -> dict:
     """Get a specific backtest run with metrics."""
@@ -958,6 +975,14 @@ async def get_backtest(run_id: str, catalog: CatalogDep) -> dict:
         raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
 
     result = df.to_dicts()[0]
+
+    # strategy_type: persisted on the run row for new runs; for pre-migration
+    # runs fall back to the saved strategy config (ML tabs in the UI depend
+    # on this field).
+    if not result.get("strategy_type"):
+        result["strategy_type"] = _infer_strategy_type(
+            catalog, result.get("strategy_id", "")
+        )
 
     # Load metrics from artifacts file (offload to thread to avoid blocking event loop)
     metrics_path = _safe_metrics_path(run_id)

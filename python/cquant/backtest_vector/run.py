@@ -147,6 +147,7 @@ def _ensure_run_schema_extensions(catalog: Catalog) -> None:
         return
     for ddl in [
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS benchmark_asset_id VARCHAR DEFAULT ''",
+        "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS strategy_type VARCHAR DEFAULT ''",
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS is_walk_forward BOOLEAN DEFAULT FALSE",
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS n_folds INTEGER",
         "ALTER TABLE gold_backtest_runs ADD COLUMN IF NOT EXISTS aggregated_metrics_json JSON",
@@ -770,11 +771,12 @@ class BacktestRunner:
         self._catalog.execute(
             "INSERT INTO gold_backtest_runs "
             "(run_id, engine, strategy_id, dataset_version, started_at, completed_at, status, "
-            " is_walk_forward, n_folds, aggregated_metrics_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?)",
+            " is_walk_forward, n_folds, aggregated_metrics_json, strategy_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)",
             [
                 run_id, "walk_forward", spec.strategy_id, spec.dataset_version,
                 now, now, True, len(fold_results), json.dumps(aggregated),
+                spec.strategy_type or "",
             ],
         )
 
@@ -1323,8 +1325,8 @@ class BacktestRunner:
             INSERT INTO gold_backtest_runs
                 (run_id, engine, strategy_id, dataset_version, signal_set_version,
                  cost_model_config, started_at, completed_at, status, metrics_uri, tags,
-                 benchmark_asset_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 benchmark_asset_id, strategy_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 result.run_id,
@@ -1339,6 +1341,7 @@ class BacktestRunner:
                 str(metrics_path),
                 json.dumps(spec.tags),
                 spec.benchmark_asset_id or "",
+                spec.strategy_type or "",
             ],
         )
 

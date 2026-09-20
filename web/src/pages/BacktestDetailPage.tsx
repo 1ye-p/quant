@@ -20,12 +20,16 @@ const TABS: TabDef[] = [
   { id: 'risk', path: 'risk' },
   { id: 'calendar', path: 'calendar' },
   { id: 'advanced', path: 'advanced' },
-  { id: 'model-compare', path: 'model-compare' },
-  { id: 'feature-importance', path: 'feature-importance' },
-  { id: 'model-diagnostics', path: 'model-diagnostics' },
   { id: 'trade-analysis', path: 'trade-analysis' },
   { id: 'regime_timeline', path: 'regime_timeline' },
   { id: 'report', path: 'report' },
+]
+
+// ML-specific tabs — only rendered when the run came from an ML strategy
+const ML_TABS: TabDef[] = [
+  { id: 'model-compare', path: 'model-compare' },
+  { id: 'feature-importance', path: 'feature-importance' },
+  { id: 'model-diagnostics', path: 'model-diagnostics' },
 ]
 
 export function BacktestDetailPage() {
@@ -40,7 +44,13 @@ export function BacktestDetailPage() {
   })
 
   const isWalkForward = detail?.engine === 'walk_forward'
-  const visibleTabs = isWalkForward ? TABS : TABS.filter(tab => tab.id !== 'walkforward')
+  const isMLRun = detail?.strategy_type === 'MLModelStrategy'
+  // Base tabs: drop walkforward for non-walk-forward runs; splice ML tabs in
+  // after 'advanced' only for ML-strategy runs (12 tabs otherwise).
+  const baseTabs = isWalkForward ? TABS : TABS.filter(tab => tab.id !== 'walkforward')
+  const visibleTabs = isMLRun
+    ? baseTabs.flatMap(tab => tab.id === 'advanced' ? [tab, ...ML_TABS] : [tab])
+    : baseTabs
 
   // Workflow integration: update context when backtest detail loads
   const { currentWorkflow, updateContext } = useWorkflowStore()

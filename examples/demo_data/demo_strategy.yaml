@@ -1,0 +1,15 @@
+# cQuant onboarding demo strategy — DSL momentum TopN
+# Score: 20d momentum, equal-weight TopN, 8% fixed stop loss.
+name: demo_momentum_top10
+universe: all
+frequency: daily
+score:
+  - factor: ret_20d
+    weight: 1.0
+position:
+  method: equal_weight
+risk:
+  - type: fixed_stop_loss
+    params:
+      stop_pct: -0.08
+      exit_fraction: 1.0

@@ -50,6 +50,7 @@ export const BacktestSchema = z.object({
   started_at: z.string(),
   completed_at: z.string().nullable(),
   status: z.string(),
+  strategy_type: z.string().optional(),
   is_running_job: z.boolean().optional(),
   metrics: BacktestMetricsSchema.optional(),
 })

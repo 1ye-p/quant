@@ -39,6 +39,7 @@ from cquant.api_server.routes import (
     advisor,
     backtests,
     datasets,
+    demo,
     factors,
     indicators,
     live,
@@ -249,6 +250,7 @@ def create_app(
     app.include_router(market.router, prefix=prefix, dependencies=_auth)
     app.include_router(share.router, prefix=prefix, dependencies=_auth)
     app.include_router(query.router, prefix=prefix, dependencies=_auth)
+    app.include_router(demo.router, prefix=prefix, dependencies=_auth)
 
     logger.info("cQuant API v%s ready — docs at /api/docs", _VERSION)
     return app

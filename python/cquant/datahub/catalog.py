@@ -171,6 +171,7 @@ class Catalog:
         self._stop_event: threading.Event | None = None
         self._checkpoint_thread: threading.Thread | None = None
         self._checkpoint_interval: float = 0.0
+        self.read_only = read_only or backend is not None and getattr(backend, "read_only", False)
         if backend is not None:
             self._backend: CatalogBackend = backend
             self._db_path = Path(db_path)

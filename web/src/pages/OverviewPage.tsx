@@ -354,6 +354,7 @@ export function OverviewPage() {
           <QuickLink to="/knowledge"  icon="📄" label={t('page.overview.quick_link.knowledge.label')}  desc={t('page.overview.quick_link.knowledge.desc')} />
           <QuickLink to="/news"       icon="📰" label={t('page.overview.quick_link.news.label')}       desc={t('page.overview.quick_link.news.desc')} />
           <QuickLink to="/live"       icon="📡" label={t('page.overview.quick_link.live.label')}       desc={t('page.overview.quick_link.live.desc')} />
+          <QuickLink to="/welcome"    icon="🚀" label={t('page.overview.quick_link.welcome.label')}   desc={t('page.overview.quick_link.welcome.desc')} />
         </div>
       </div>
 

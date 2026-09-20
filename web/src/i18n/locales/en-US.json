@@ -2715,6 +2715,10 @@
         "live": {
           "label": "Live Monitor",
           "desc": "Simulated positions & risk"
+        },
+        "welcome": {
+          "label": "Getting Started",
+          "desc": "First backtest in 3 steps"
         }
       },
       "column": {
@@ -3546,6 +3550,29 @@
       "results": "Results",
       "no_data": "No data",
       "hint": "Pick a table and press \"Run query\", or use a preset above."
+    },
+    "welcome": {
+      "title": "Welcome to cQuant",
+      "subtitle": "Run your first backtest in 3 steps: seed demo data → run the demo strategy → view results",
+      "running": "Running…",
+      "done": "Onboarding complete! You've run the full cQuant backtest loop — explore the factor lab and ML lab next.",
+      "backHome": "Back to overview",
+      "step1": {
+        "title": "1. Seed demo data",
+        "desc": "Load 50 synthetic A-share stocks × 2y daily bars plus a market breadth indicator (deterministic seed)",
+        "action": "Seed demo data",
+        "result": "Imported {{assets}} assets, {{rows}} daily bars"
+      },
+      "step2": {
+        "title": "2. Run demo backtest",
+        "desc": "Backtest the DSL momentum strategy (20d momentum TopN + 8% fixed stop loss) on the demo data",
+        "action": "Start backtest"
+      },
+      "step3": {
+        "title": "3. View results",
+        "desc": "Inspect the decision summary, NAV curve and risk metrics once the run completes",
+        "action": "Open backtest detail"
+      }
     }
   }
 }

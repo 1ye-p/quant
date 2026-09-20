@@ -9,6 +9,57 @@ from datetime import date
 
 from cquant.datahub.catalog import Catalog
 
+# Commands that only read from the catalog — safe to run in read-only mode
+# when the DuckDB file is locked by another process (e.g. the API server).
+READ_ONLY_COMMANDS = {"status", "positions", "tca", "scheduler-status"}
+
+
+def _is_lock_conflict(exc: Exception) -> bool:
+    """DuckDB raises IOException with 'Conflicting lock' when another process
+    holds a write lock on the database file."""
+    return "Conflicting lock" in str(exc)
+
+
+def _open_catalog(path: str, command: str) -> Catalog:
+    """Open the catalog, degrading to read-only on a DuckDB lock conflict.
+
+    - No conflict → normal read-write connection.
+    - Lock conflict + read-only command → read-only connection with a notice.
+    - Lock conflict + write command → clear error + exit code 2.
+    - Lock conflict + read-only connect also fails → re-raise original error.
+    """
+    try:
+        return Catalog(path)
+    except Exception as exc:
+        if not _is_lock_conflict(exc):
+            raise
+        print(
+            "Catalog is locked by another process (API server running?) — "
+            "retrying in read-only mode...",
+            file=sys.stderr,
+        )
+        try:
+            catalog = Catalog(path, read_only=True)
+        except Exception:
+            raise exc
+        if command not in READ_ONLY_COMMANDS:
+            print(
+                f"Error: command '{command}' needs write access, but the catalog "
+                "is locked by another process.\n"
+                "Stop the API server (or point --catalog at a copy) and retry.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print("Read-only mode: only query commands (status/positions/tca) are available.", file=sys.stderr)
+        return catalog
+
+
+def _ensure_schema(catalog: Catalog) -> None:
+    """catalog.initialize() that is a no-op in read-only mode (DDL would fail)."""
+    if getattr(catalog, "read_only", False):
+        return
+    catalog.initialize()
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for CLI."""
@@ -24,7 +75,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     """Handle 'ingest' command."""
     from cquant.datahub.ingest import MarketIngestionOrchestrator
 
-    with Catalog(args.catalog) as catalog:
+    with _open_catalog(args.catalog, "ingest") as catalog:
 
         if args.source == "tdx":
             orchestrator = MarketIngestionOrchestrator(catalog, [])
@@ -80,7 +131,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> None:
     """Handle 'bootstrap' command."""
     from cquant.datahub.bootstrap import bootstrap_assets_from_tdx, bootstrap_calendar_from_tdx
 
-    with Catalog(args.catalog) as catalog:
+    with _open_catalog(args.catalog, "bootstrap") as catalog:
 
         if args.target == "assets":
             count = bootstrap_assets_from_tdx(catalog, args.tdx_db)
@@ -103,7 +154,7 @@ def cmd_factors(args: argparse.Namespace) -> None:
     from cquant.factorlab.factors import BUILTIN_FACTORS
     from cquant.factorlab.materialize import FactorMaterializer, FactorMaterializationSpec
 
-    with Catalog(args.catalog) as catalog:
+    with _open_catalog(args.catalog, "factors") as catalog:
 
         registry = FactorRegistry()
         if args.all:
@@ -141,7 +192,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
 
     toml_defaults = get_backtest_defaults()
 
-    with Catalog(args.catalog) as catalog:
+    with _open_catalog(args.catalog, "backtest") as catalog:
         runner = BacktestRunner(catalog)
 
         # initial_cash: 命令行 > TOML > 硬编码默认值 100 万
@@ -178,7 +229,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     from cquant.backtest_vector.engine import BacktestResult
     from cquant.bt_analyzer.run import AnalysisRunner, AnalysisRunSpec
 
-    with Catalog(args.catalog) as catalog:
+    with _open_catalog(args.catalog, "analyze") as catalog:
 
         # Load backtest result (simplified - in real usage, load from persisted data)
         print("Analysis command requires a BacktestResult object")
@@ -191,8 +242,8 @@ def cmd_tca(args: argparse.Namespace) -> None:
     from cquant.backtest_vector.tca import TransactionCostAnalyzer
     import polars as pl
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "tca") as catalog:
+        _ensure_schema(catalog)
 
         # Get fills for the specified run
         fills = catalog.query(
@@ -233,8 +284,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
     """Handle 'positions' command."""
     import json
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "positions") as catalog:
+        _ensure_schema(catalog)
 
         if args.run_id:
             # Show positions for a specific run
@@ -274,8 +325,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Handle 'status' command."""
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "status") as catalog:
+        _ensure_schema(catalog)
 
         print("=== cQuant Status ===\n")
 
@@ -377,8 +428,8 @@ def cmd_live_start(args: argparse.Namespace) -> None:
     """Handle 'live start' command."""
     from cquant.execution.live_executor import LiveExecutor
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "live-start") as catalog:
+        _ensure_schema(catalog)
 
         executor = LiveExecutor(
             catalog,
@@ -574,8 +625,8 @@ def cmd_scheduler_start(args: argparse.Namespace) -> None:
     """Handle 'scheduler start' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "scheduler-start") as catalog:
+        _ensure_schema(catalog)
 
         scheduler = DataScheduler(catalog)
         print("Starting data scheduler (Ctrl+C to stop)...")
@@ -586,8 +637,8 @@ def cmd_scheduler_status(args: argparse.Namespace) -> None:
     """Handle 'scheduler status' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "scheduler-status") as catalog:
+        _ensure_schema(catalog)
 
         scheduler = DataScheduler(catalog)
         info = scheduler.status()
@@ -609,8 +660,8 @@ def cmd_scheduler_run(args: argparse.Namespace) -> None:
     """Handle 'scheduler run <task>' command."""
     from cquant.scheduler.data_scheduler import DataScheduler
 
-    with Catalog(args.catalog) as catalog:
-        catalog.initialize()
+    with _open_catalog(args.catalog, "scheduler-run") as catalog:
+        _ensure_schema(catalog)
 
         scheduler = DataScheduler(catalog)
         print(f"Running task: {args.task}")

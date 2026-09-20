@@ -38,6 +38,8 @@ export { newsApi } from './api/news'
 export type { NewsEvent, NewsStats } from './api/news'
 
 export { strategiesApi } from './api/strategies'
+export { demoApi } from './api/demo'
+export type { DemoSeedResult, DemoStatus } from './api/demo'
 
 export { mlApi } from './api/ml'
 export type {

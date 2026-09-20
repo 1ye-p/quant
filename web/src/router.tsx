@@ -11,6 +11,7 @@ const named = <T extends Record<string, unknown>>(
 ) => lazy(() => loader().then(m => ({ default: m[name] as React.ComponentType })))
 
 const OverviewPage  = named(() => import('@/pages/OverviewPage'), 'OverviewPage')
+const WelcomePage   = named(() => import('@/pages/WelcomePage'), 'WelcomePage')
 const DatasetsPage  = named(() => import('@/pages/DatasetsPage'), 'DatasetsPage')
 const DataBrowserPage = named(() => import('@/pages/DataBrowserPage'), 'DataBrowserPage')
 const ExternalIndicatorsImportPage = named(() => import('@/pages/ExternalIndicatorsImport'), 'ExternalIndicatorsImportPage')
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <OverviewPage /> },
+      { path: 'welcome',    element: <WelcomePage /> },
       { path: 'factors',    element: <FactorsPage /> },
       { path: 'strategies', element: <StrategiesPage /> },
       { path: 'ml',         element: <MLLabPage /> },

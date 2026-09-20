@@ -1,5 +1,5 @@
 import { useState, useEffect, Suspense } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -11,6 +11,7 @@ import { useThemeStore } from '@/stores/themeStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import { WorkflowBar } from '@/components/workflow/WorkflowBar'
+import { isOnboarded, markOnboarded } from '@/pages/WelcomePage'
 
 const NAV_ICONS: Record<string, string> = {
   '/factors':    '🔬',
@@ -78,7 +79,11 @@ function useNavGroups() {
 
 export function AppLayout() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const navGroups = useNavGroups()
+  // One-time onboarding banner: only shown until the user completes or skips
+  // the /welcome demo guide (state persisted via localStorage).
+  const [showOnboarding, setShowOnboarding] = useState(() => !isOnboarded())
   const queryClient = useQueryClient()
   const location = useLocation()
   const { mode, toggle: toggleTheme } = useThemeStore()
@@ -431,6 +436,44 @@ export function AppLayout() {
 
           {/* Main content */}
           <main className={`flex-1 overflow-y-auto p-8 bg-gray-50 ${currentWorkflow ? 'pt-18' : ''}`}>
+            {showOnboarding && location.pathname !== '/welcome' && (
+              <div
+                data-testid="onboarding-banner"
+                className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3"
+              >
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-900">
+                    {t('common.layout.onboarding_banner_title')}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {t('common.layout.onboarding_banner_desc')}
+                  </p>
+                </div>
+                <div className="flex gap-2 flex-shrink-0">
+                  <button
+                    className="btn-primary text-sm"
+                    onClick={() => {
+                      // Do not persist yet — WelcomePage marks onboarded when
+                      // the demo flow completes, so abandoning the guide
+                      // re-shows the banner on the next visit.
+                      setShowOnboarding(false)
+                      navigate('/welcome')
+                    }}
+                  >
+                    {t('common.layout.onboarding_start')}
+                  </button>
+                  <button
+                    className="btn-secondary text-sm"
+                    onClick={() => {
+                      markOnboarded()
+                      setShowOnboarding(false)
+                    }}
+                  >
+                    {t('common.layout.onboarding_skip')}
+                  </button>
+                </div>
+              </div>
+            )}
             <Breadcrumb />
             <Suspense fallback={
               <div className="flex items-center justify-center h-64">

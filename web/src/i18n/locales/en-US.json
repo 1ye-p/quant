@@ -190,6 +190,10 @@
       "running_tasks_title": "Running Tasks",
       "auto_refresh": "Auto-refresh every 10s",
       "no_running_tasks": "No running tasks",
+      "onboarding_banner_title": "Welcome to cQuant — start the 5-minute guided demo",
+      "onboarding_banner_desc": "Import sample data and run a demo backtest to quickly learn the research workflow.",
+      "onboarding_start": "Start guide",
+      "onboarding_skip": "Skip",
       "language_switcher": {
         "aria_label": "Language",
         "zh-CN": "中文",

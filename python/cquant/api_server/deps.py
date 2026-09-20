@@ -275,22 +275,30 @@ def verify_api_key(
 ) -> None:
     """Verify Bearer token against CQUANT_API_KEY env var.
 
-    Auth behavior when CQUANT_API_KEY is not set:
-    - /trading/* endpoints: REJECT with 503 (safety-critical)
-    - Other endpoints: PASS in dev mode with warning log
+    Default-deny: when CQUANT_API_KEY is not set, ALL authenticated endpoints
+    (including /trading/*) are rejected with 503. Set the key via
+    ``cquant auth generate-key`` or the CQUANT_API_KEY environment variable.
+
+    Escape hatch: ``CQUANT_AUTH_MODE=dev`` restores the historical permissive
+    behavior for local development (non-trading endpoints pass with a one-time
+    warning; trading endpoints still require a key).
     """
     global _auth_warned
+    mode = os.getenv("CQUANT_AUTH_MODE", "strict")
     api_key = os.environ.get("CQUANT_API_KEY", "")
     if not api_key:
-        if _is_trading_endpoint(request):
+        if mode != "dev" or _is_trading_endpoint(request):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Trading endpoints require CQUANT_API_KEY to be configured.",
+                detail=(
+                    "API key not configured. Run 'cquant auth generate-key' "
+                    "or set CQUANT_API_KEY. See docs/security.md"
+                ),
             )
         if not _auth_warned:
             _logger.warning(
-                "CQUANT_API_KEY is not set — API authentication is DISABLED. "
-                "Set this environment variable before deploying to production."
+                "CQUANT_API_KEY is not set and CQUANT_AUTH_MODE=dev — API "
+                "authentication is DISABLED. Never use dev mode in production."
             )
             _auth_warned = True
         return

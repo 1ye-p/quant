@@ -420,6 +420,23 @@ def cmd_trade_account(args: argparse.Namespace) -> None:
     print(f"  Positions:     {len(account.positions):>15,}")
 
 
+def cmd_auth_generate_key(args: argparse.Namespace) -> None:
+    """Handle 'auth generate-key' command."""
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits
+    api_key = "".join(secrets.choice(alphabet) for _ in range(32))
+
+    print("\n=== Generated API Key ===\n")
+    print(f"  {api_key}\n")
+    print("Set it before starting the API server:")
+    print("  export CQUANT_API_KEY='" + api_key + "'")
+    print("\nClients must send: Authorization: Bearer <key>")
+    print("For local development without a key: export CQUANT_AUTH_MODE=dev")
+    print("See docs/security.md for rotation and deployment guidance.\n")
+
+
 def _detect_exchange(symbol: str) -> str:
     """Detect exchange from symbol prefix."""
     if symbol.startswith(("6", "5")):
@@ -784,6 +801,14 @@ def build_parser() -> argparse.ArgumentParser:
     trade_orders.add_argument("--broker", default="paper", help="Broker name")
     trade_orders.add_argument("--status", help="Filter by status (pending/filled/cancelled/rejected)")
     trade_orders.set_defaults(func=cmd_trade_orders)
+
+    # auth command
+    auth_parser = subparsers.add_parser("auth", help="Authentication utilities")
+    auth_sub = auth_parser.add_subparsers(dest="auth_cmd", help="Auth subcommands")
+
+    # auth generate-key
+    auth_gen = auth_sub.add_parser("generate-key", help="Generate a secure API key")
+    auth_gen.set_defaults(func=cmd_auth_generate_key)
 
     return parser
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from decimal import Decimal
 
@@ -10,6 +11,19 @@ import pytest
 
 from cquant.core.enums import AssetClass, Currency, Exchange
 from cquant.core.types import Asset
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _api_dev_auth_mode():
+    """Run the suite under CQUANT_AUTH_MODE=dev.
+
+    API auth is default-deny (503 without CQUANT_API_KEY). Most API tests
+    exercise endpoints without a key and rely on the historical permissive
+    behavior; dev mode preserves that. Tests that assert strict behavior
+    (test_auth_strict.py) override this via monkeypatch.
+    """
+    os.environ.setdefault("CQUANT_AUTH_MODE", "dev")
+    yield
 
 
 @pytest.fixture

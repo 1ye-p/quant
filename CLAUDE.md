@@ -138,7 +138,7 @@ Rust toolchain (managed via rust/ git submodule)
 
 ```bash
 git clone <repo-url>
-cd cQuant
+cd quant
 # Initialize the git submodule (after configuring the real URL in .gitmodules)
 git submodule update --init --recursive
 

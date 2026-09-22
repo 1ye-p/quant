@@ -225,6 +225,9 @@ class WalkForwardRefit:
                 prices=spec.prices,
                 start_date=train_start,
                 end_date=train_end,
+                # B1: regime 状态机透传（实例由 refit_callback 按 fold 重建，
+                # 各 fold 从 initial 状态开始；无 regime 时为 None）
+                regime_sm=spec.regime_sm,
                 initial_cash=spec.initial_cash,
                 cost_model=spec.cost_model,
                 sizer=spec.sizer,
@@ -244,6 +247,8 @@ class WalkForwardRefit:
                 prices=spec.prices,
                 start_date=test_start,
                 end_date=test_end,
+                # B1: 与 train_spec 同一 fold 实例（callback 已按 fold 重建）
+                regime_sm=spec.regime_sm,
                 initial_cash=spec.initial_cash,
                 cost_model=spec.cost_model,
                 sizer=spec.sizer,

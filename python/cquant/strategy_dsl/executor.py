@@ -1,10 +1,12 @@
-"""DSLStrategy — L2 声明式策略执行器（无 regime；regime 于 T4/P3S-2 接入）。
+"""DSLStrategy — L2 声明式策略执行器。
 
 score 段复用 CrossSectionScorer 的截面标准化（winsorize/fill_null/zscore）
 与加权求和；`custom:` 前缀因子经 factor_registry（name → ExpressionFactor）
 解析，实际取值来自已物化的 ctx.features 宽表列（Phase 2 落盘闭环）。
 position/risk 段映射既有 sizer / RiskPolicy 实例，由引擎 / BacktestRunner
 挂载（generate_signals 本身只负责 score → SignalFrame）。
+regime 段不在本层执行：BacktestRunner 装配 RegimeStateMachine（B1 接线），
+引擎在每个调仓日按 regime position_scale 缩放目标权重。
 """
 
 from __future__ import annotations

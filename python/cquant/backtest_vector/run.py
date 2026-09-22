@@ -457,6 +457,9 @@ class BacktestRunner:
             if not risk_policies:
                 risk_policies = strategy.build_risk_policies()
 
+        # B1 装配：DSL spec 含 regime 段时挂载状态机（无 regime 保持 None）
+        regime_sm = self._regime_sm_for_strategy(strategy)
+
         bt_spec = BacktestSpec(
             strategy=strategy,
             prices=prices,
@@ -470,6 +473,7 @@ class BacktestRunner:
             risk_policies=risk_policies,
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
+            regime_sm=regime_sm,
         )
 
         result = self._engine.run(bt_spec)
@@ -505,6 +509,9 @@ class BacktestRunner:
         strategy = self._build_strategy(spec)
         cost_model = self._detect_cost_model(prices)
 
+        # B1 装配：walk-forward base_spec 同样挂 regime（fold 内由 refit 回调重建）
+        regime_sm = self._regime_sm_for_strategy(strategy)
+
         bt_spec = BacktestSpec(
             strategy=strategy,
             prices=prices,
@@ -517,11 +524,29 @@ class BacktestRunner:
             risk_policies=spec.risk_policies,
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
+            regime_sm=regime_sm,
         )
 
         # Build refit callback that re-trains ML models per fold
         wf_config = spec.walk_forward
         refit_callback = self._build_refit_callback(spec, features) if spec.model_version else None
+
+        # B1 硬约束：regime 状态机按 fold 重建（各 fold 从 initial 状态开始，
+        # 避免上一 fold 的 latch 状态泄漏进下一 fold）。与 ML refit 回调组合。
+        if regime_sm is not None:
+            def _rebuild_regime(base_spec, train_start, train_end, fold_idx: int = 0):
+                sm = self._regime_sm_for_strategy(base_spec.strategy)
+                from dataclasses import replace as _replace
+                return _replace(base_spec, regime_sm=sm)
+
+            if refit_callback is not None:
+                _model_refit = refit_callback
+
+                def refit_callback(base_spec, train_start, train_end, fold_idx: int = 0):
+                    fitted = _model_refit(base_spec, train_start, train_end)
+                    return _rebuild_regime(fitted, train_start, train_end)
+            else:
+                refit_callback = _rebuild_regime
 
         refit = WalkForwardRefit(
             base_spec=bt_spec,
@@ -893,6 +918,8 @@ class BacktestRunner:
             benchmark_asset_id=benchmark_asset_id,
             tags=tags or {},
             random_seed=persist_spec.random_seed,
+            # B1 装配：DSL 策略含 regime 段时挂载状态机（无 regime 保持 None）
+            regime_sm=self._regime_sm_for_strategy(strategy),
         )
 
         result = self._engine.run(bt_spec)
@@ -1119,6 +1146,22 @@ class BacktestRunner:
             ValidationContext(known_factors=known, custom_factors=set(custom)),
             custom,
         )
+
+    def _regime_sm_for_strategy(self, strategy: Strategy) -> "object | None":
+        """Build a fresh RegimeStateMachine for DSL strategies with a regime segment.
+
+        Returns None for non-DSL / regime-less strategies (zero behaviour change).
+        A fresh instance is returned on every call so callers that re-invoke this
+        per fold / per run always start from the initial state (no latch leak).
+        """
+        dsl = getattr(strategy, "spec", None)
+        regime = getattr(dsl, "regime", None)
+        if regime is None:
+            return None
+        from cquant.strategy_dsl.market_context import MarketSeriesContext
+        from cquant.strategy_dsl.regime import RegimeStateMachine
+
+        return RegimeStateMachine(regime, MarketSeriesContext(self._catalog))
 
     def _build_strategy(self, spec: BacktestRunSpec) -> Strategy:
         if spec.strategy_type == "MLModelStrategy":

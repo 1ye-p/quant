@@ -2838,6 +2838,8 @@ async def run_sensitivity_analysis(
                 tags=spec.tags,
                 risk_policies=spec.risk_policies,
                 extra={"catalog": catalog},
+                # B1 装配：DSL regime 段 → 状态机（无 regime 保持 None）
+                regime_sm=runner._regime_sm_for_strategy(strategy),
             )
 
             # Create ParameterGrid and run sensitivity analysis
@@ -3308,6 +3310,8 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 features=features, tags=tags,
                 risk_policies=run_spec.risk_policies,
                 extra={"catalog": catalog},
+                # B1 装配：DSL regime 段 → 状态机（无 regime 保持 None）
+                regime_sm=runner._regime_sm_for_strategy(base_strategy),
             )
             analyzer = _SuiteSensitivity(
                 runner=runner, run_spec=run_spec, dsl_base=dsl_spec,
@@ -3349,19 +3353,39 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
             steps.append({"step": "regime_cycles", "status": "skipped",
                           "reason": "非 regime 策略（dsl_spec 无 regime 段）"})
         else:
-            from cquant.strategy_dsl.market_context import MarketSeriesContext
-            from cquant.strategy_dsl.regime import RegimeStateMachine
+            # 同源原则（B1 Step4）：优先从实际回测产物的 regime_scale_history
+            # （{run_id}_regime.parquet）数状态切换，不另起状态机各算各的；
+            # 产物缺失（B1 接线前的历史 run）才退回独立重估。
+            transitions: int | None = None
+            regime_artifact = pathlib.Path("data/backtest_artifacts") / f"{run_id}_regime.parquet"
+            if regime_artifact.exists():
+                import polars as pl
 
-            sm = RegimeStateMachine(regime_def, MarketSeriesContext(catalog))
-            trade_dates = result.portfolio_returns.get_column("trade_date").to_list()
-            prev_key = None
-            transitions = 0
-            for td in trade_dates:
-                rr = sm.evaluate(td)
-                key = (rr.state, round(float(rr.position_scale), 6))
-                if prev_key is not None and key != prev_key:
-                    transitions += 1
-                prev_key = key
+                hist = pl.read_parquet(regime_artifact)
+                scales = hist.sort("trade_date")["desired_scale"].to_list()
+                transitions = sum(
+                    1 for a, b in zip(scales, scales[1:])
+                    if round(float(a), 6) != round(float(b), 6)
+                )
+            else:
+                from cquant.strategy_dsl.market_context import MarketSeriesContext
+                from cquant.strategy_dsl.regime import RegimeStateMachine
+
+                logger.warning(
+                    "regime artifact %s missing — falling back to independent "
+                    "state-machine re-evaluation (legacy run)",
+                    regime_artifact,
+                )
+                sm = RegimeStateMachine(regime_def, MarketSeriesContext(catalog))
+                trade_dates = result.portfolio_returns.get_column("trade_date").to_list()
+                prev_key = None
+                transitions = 0
+                for td in trade_dates:
+                    rr = sm.evaluate(td)
+                    key = (rr.state, round(float(rr.position_scale), 6))
+                    if prev_key is not None and key != prev_key:
+                        transitions += 1
+                    prev_key = key
             regime_cycles = transitions
             regime_sufficient = transitions >= MIN_REGIME_CYCLES
             steps.append({

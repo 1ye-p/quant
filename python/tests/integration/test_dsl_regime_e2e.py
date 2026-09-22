@@ -200,3 +200,124 @@ def test_dsl_regime_validation_matches_execution(regime_catalog) -> None:
         f"validation suite counts {rc['cycles']} regime cycles but the executed "
         f"run artifact shows {exec_transitions} — statistics and execution diverged"
     )
+
+
+# ─── Fix round 1 covering tests：变体 spec 不得丢弃 regime_sm ────────────────
+# sensitivity / validation 网格逐字段重建 BacktestSpec 时曾丢掉 regime_sm，
+# 导致 base_spec 上的装配成死接线（变体回测依旧不缩放）。以下测试锁定：
+#   1. 变体 spec.regime_sm 非空；
+#   2. regime_scale:* 变体的状态机基于改过 scale 的 regime 定义（扫描语义）；
+#   3. 每个变体全新实例（顺序执行无 latch 泄漏）；
+#   4. random_seed 随变体透传。
+
+
+class _StubRunner:
+    """最小 runner 桩：_regime_sm_for_strategy 用真实实现（只需 _catalog），
+    _build_strategy 解析 dsl 后返回带 .spec 的策略壳供状态机提取 regime。"""
+
+    def __init__(self, catalog) -> None:
+        self._catalog = catalog
+        self._regime_sm_for_strategy = BacktestRunner._regime_sm_for_strategy.__get__(self)
+
+    def _build_strategy(self, run_spec):
+        from types import SimpleNamespace
+        from cquant.strategy_dsl.schema import StrategyDSL
+
+        return SimpleNamespace(spec=StrategyDSL.from_dict(run_spec.dsl_spec))
+
+
+def _variant_suite_analyzer(dsl: dict, random_seed: int | None = 42):
+    from cquant.backtest_vector.engine import BacktestSpec
+    from cquant.backtest_vector.run import BacktestRunSpec
+    from cquant.backtest_vector.sensitivity import ParameterGrid
+    from cquant.api_server.routes.backtests import _SuiteSensitivity
+
+    class _NullCatalog:
+        def query(self, *_a, **_k):
+            return pl.DataFrame()
+
+    runner = _StubRunner(_NullCatalog())
+    run_spec = BacktestRunSpec(
+        dataset_version="v1", strategy_id="regime_variants",
+        start_date=DATES[5], end_date=DATES[-1],
+        feature_set_version=FEATURE_SET, strategy_type="DSL",
+        dsl_spec=dsl, top_n=1,
+    )
+    base_spec = BacktestSpec(
+        strategy=_StubStrategy(dsl), prices=pl.DataFrame(),
+        start_date=DATES[5], end_date=DATES[-1],
+        random_seed=random_seed,
+    )
+    analyzer = _SuiteSensitivity(
+        runner=runner, run_spec=run_spec, dsl_base=dsl,
+        base_spec=base_spec, param_grid=ParameterGrid({}),
+    )
+    return analyzer
+
+
+class _StubStrategy:
+    def __init__(self, dsl: dict) -> None:
+        from types import SimpleNamespace
+        from cquant.strategy_dsl.schema import StrategyDSL
+
+        self.spec = SimpleNamespace(regime=StrategyDSL.from_dict(dsl).regime)
+
+
+def test_suite_variant_specs_carry_regime_sm(regime_catalog) -> None:
+    """validation suite 变体：regime_sm 非空 + regime_scale 变体用改过 scale 的定义。"""
+    import copy
+
+    analyzer = _variant_suite_analyzer(copy.deepcopy(DSL_SPEC))
+
+    # 1. regime_scale 变体：状态机必须基于改过 scale 的 regime 定义构造
+    spec = analyzer._create_spec_with_params({"regime_scale:states[1]": 0.2})
+    assert spec.regime_sm is not None, (
+        "_SuiteSensitivity variant spec dropped regime_sm — regime_scale grid "
+        "variants would record statistics without ever scaling (dead wiring)"
+    )
+    assert spec.regime_sm._def.states[1].position_scale == pytest.approx(0.2), (
+        "regime_scale variant must build its state machine from the MODIFIED "
+        "regime definition, not the base one"
+    )
+
+    # 2. 非 regime 参数变体（top_n）同样携带 regime_sm（基于 base 定义）
+    spec_topn = analyzer._create_spec_with_params({"top_n": 5})
+    assert spec_topn.regime_sm is not None
+    assert spec_topn.regime_sm._def.states[1].position_scale == pytest.approx(REGIME_SCALE_OFF)
+
+    # 3. 每个变体全新实例：顺序执行下共享状态机会泄漏 latch/hold 状态
+    spec_again = analyzer._create_spec_with_params({"regime_scale:states[1]": 0.2})
+    assert spec_again.regime_sm is not spec.regime_sm, (
+        "variant specs must not share one regime state machine instance"
+    )
+
+    # 4. random_seed 透传（既有丢弃问题的顺手修复）
+    assert spec.random_seed == 42
+
+
+def test_base_grid_variant_specs_carry_regime_sm(regime_catalog) -> None:
+    """sensitivity 端点（GridSearchSensitivity + regime_sm_factory）：变体
+    spec.regime_sm 非空且逐变体新实例；random_seed 透传。"""
+    from cquant.backtest_vector.engine import BacktestSpec
+    from cquant.backtest_vector.sensitivity import GridSearchSensitivity, ParameterGrid
+
+    runner = _StubRunner(None)
+    analyzer = GridSearchSensitivity(
+        base_spec=BacktestSpec(
+            strategy=_StubStrategy(DSL_SPEC), prices=pl.DataFrame(),
+            start_date=DATES[5], end_date=DATES[-1],
+            random_seed=7,
+        ),
+        param_grid=ParameterGrid({"top_n": [5, 10]}),
+        regime_sm_factory=lambda: runner._regime_sm_for_strategy(
+            _StubStrategy(DSL_SPEC)
+        ),
+    )
+    s1 = analyzer._create_spec_with_params({"top_n": 5})
+    s2 = analyzer._create_spec_with_params({"top_n": 10})
+    assert s1.regime_sm is not None, (
+        "GridSearchSensitivity variant spec dropped regime_sm — sensitivity "
+        "grid variants of regime DSL strategies would never scale"
+    )
+    assert s1.regime_sm is not s2.regime_sm, "factory must yield a fresh instance per variant"
+    assert s1.random_seed == 7 and s2.random_seed == 7

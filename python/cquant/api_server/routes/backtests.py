@@ -2850,6 +2850,10 @@ async def run_sensitivity_analysis(
                 base_spec=base_spec,
                 param_grid=param_grid,
                 primary_metric=body.primary_metric,
+                # B1 装配（fix）：变体 spec 需自带 regime 状态机——base_spec 上
+                # 的 regime_sm 此前在逐字段重建时被丢弃（死接线）。工厂保证
+                # 每个变体拿到全新实例（变体顺序执行，共享会泄漏 latch 状态）。
+                regime_sm_factory=lambda: runner._regime_sm_for_strategy(strategy),
             )
 
             # Timeout check before running
@@ -3142,6 +3146,12 @@ class _SuiteSensitivity(GridSearchSensitivity):
             tags=self._base_spec.tags,
             optimizer=self._base_spec.optimizer,
             extra=new_extra,
+            random_seed=self._base_spec.random_seed,
+            # B1 装配（fix）：变体 spec 需自带 regime 状态机。基于（可能已
+            # 重建的）strategy 重新构造：regime_scale:* 变体的 strategy 已用
+            # 改过 scale 的 regime 定义重建 → 状态机扫描的是变体强度；
+            # 每次调用返回全新实例，变体间无 latch 泄漏。
+            regime_sm=self._suite_runner._regime_sm_for_strategy(strategy),
         )
 
 

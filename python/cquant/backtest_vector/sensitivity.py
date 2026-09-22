@@ -108,6 +108,7 @@ class GridSearchSensitivity:
         primary_metric: str = "sharpe_ratio",
         engine: VectorBacktestEngine | None = None,
         max_workers: int = 1,
+        regime_sm_factory: Callable[[], Any] | None = None,
     ) -> None:
         """Initialize sensitivity analyzer.
 
@@ -117,12 +118,19 @@ class GridSearchSensitivity:
             primary_metric: Metric to optimize (default: sharpe_ratio).
             engine: Backtest engine instance (creates new one if None).
             max_workers: Maximum parallel workers (default: 1, sequential).
+            regime_sm_factory: Optional factory producing a fresh regime state
+                machine per variant spec. Variants run sequentially on one
+                engine, so the state machine must NOT be shared across them
+                (latch/hold state would leak) — pass a factory (e.g.
+                ``lambda: runner._regime_sm_for_strategy(strategy)``) instead
+                of reusing ``base_spec.regime_sm`` directly.
         """
         self._base_spec = base_spec
         self._param_grid = param_grid
         self._primary_metric = primary_metric
         self._engine = engine or VectorBacktestEngine()
         self._max_workers = max_workers
+        self._regime_sm_factory = regime_sm_factory
 
     def _create_spec_with_params(self, params: dict[str, Any]) -> BacktestSpec:
         """Create a new BacktestSpec with modified parameters.
@@ -153,6 +161,14 @@ class GridSearchSensitivity:
             tags=self._base_spec.tags,
             optimizer=self._base_spec.optimizer,
             extra=new_extra,
+            random_seed=self._base_spec.random_seed,
+            # regime_sm: fresh instance per variant via factory (variants run
+            # sequentially — sharing one machine would leak latch state).
+            regime_sm=(
+                self._regime_sm_factory()
+                if self._regime_sm_factory is not None
+                else None
+            ),
         )
 
     def _extract_metrics(self, result: BacktestResult) -> dict[str, float]:

@@ -593,78 +593,90 @@ class VectorBacktestEngine:
                         except Exception as _exc:
                             logger.warning("Optimizer skipped for %s: %s", td, _exc)
 
-                    # Regime scaling (P3S-2, checklist #1): applied after the
-                    # optimizer and BEFORE pre-trade risk checks, so policies
-                    # see the de-risked targets.
-                    if spec.regime_sm is not None:
-                        rr = spec.regime_sm.evaluate(td)
-                        regime_desired[td] = rr.position_scale
-                        for w in rr.warnings:
-                            logger.warning("regime %s: %s", td, w)
-                        if rr.position_scale <= 0.0 and (weights_dict or committed_weights):
-                            # Full de-risk: scale → 0 means SELL everything.
-                            # Today's targets are voided; committed positions
-                            # get zero-target sells injected for T+1 with
-                            # retry via pending_force_exits ("regime:" prefix,
-                            # checklist #2) so limit-down/suspension blocked
-                            # sells are re-attempted on subsequent days.
-                            weights_dict = {}
-                            for aid in list(committed_weights.keys()):
-                                pending_force_exits[f"regime:{aid}"] = 0.0
-                                # Immediately stop counting the position
-                                # (mirrors forced-exit full-exit semantics)
-                                del committed_weights[aid]
-                                entry_prices.pop(aid, None)
-                        elif rr.position_scale < 1.0 and weights_dict:
-                            # Partial scaling flows through risk checks /
-                            # FillSimulator naturally (sell of the difference)
-                            weights_dict = {
-                                aid: w * rr.position_scale
-                                for aid, w in weights_dict.items()
-                            }
+                # Regime scaling (P3S-2, checklist #1): applied after the
+                # optimizer and BEFORE pre-trade risk checks, so policies
+                # see the de-risked targets.
+                #
+                # B3: evaluated on EVERY rebalance day, independent of
+                # whether the strategy produced signals. This mirrors
+                # reevaluate:daily semantics: the state machine advances
+                # (and regime_desired gets a same-day entry) even when
+                # signals are empty, so a latched scale-0 regime keeps
+                # its "regime:" pending sells alive at the cleanup below
+                # (the .get(td, 1.0) default would otherwise read as
+                # "recovered" and silently drop blocked de-risk sells).
+                if spec.regime_sm is not None:
+                    rr = spec.regime_sm.evaluate(td)
+                    regime_desired[td] = rr.position_scale
+                    for w in rr.warnings:
+                        logger.warning("regime %s: %s", td, w)
+                    if rr.position_scale <= 0.0 and (weights_dict or committed_weights):
+                        # Full de-risk: scale → 0 means SELL everything.
+                        # Today's targets are voided; committed positions
+                        # get zero-target sells injected for T+1 with
+                        # retry via pending_force_exits ("regime:" prefix,
+                        # checklist #2) so limit-down/suspension blocked
+                        # sells are re-attempted on subsequent days.
+                        weights_dict = {}
+                        for aid in list(committed_weights.keys()):
+                            pending_force_exits[f"regime:{aid}"] = 0.0
+                            # Immediately stop counting the position
+                            # (mirrors forced-exit full-exit semantics)
+                            del committed_weights[aid]
+                            entry_prices.pop(aid, None)
+                    elif rr.position_scale < 1.0 and weights_dict:
+                        # Partial scaling flows through risk checks /
+                        # FillSimulator naturally (sell of the difference).
+                        # On empty-signal days weights_dict is {} (reset
+                        # per day above), so this branch naturally
+                        # short-circuits — no stale-weight scaling.
+                        weights_dict = {
+                            aid: w * rr.position_scale
+                            for aid, w in weights_dict.items()
+                        }
 
-                    # Apply risk policies if configured
-                    if spec.risk_policies and weights_dict:
-                        # Build positions from previously committed weights (O(1) lookup)
-                        accumulated_pos = self._build_positions_from_weights(
-                            committed_weights, td, prices, spec.initial_cash,
-                            date_to_idx=date_to_idx, price_matrix=price_matrix,
-                        ) if committed_weights else pl.DataFrame()
+                # Apply risk policies if configured
+                if spec.risk_policies and weights_dict:
+                    # Build positions from previously committed weights (O(1) lookup)
+                    accumulated_pos = self._build_positions_from_weights(
+                        committed_weights, td, prices, spec.initial_cash,
+                        date_to_idx=date_to_idx, price_matrix=price_matrix,
+                    ) if committed_weights else pl.DataFrame()
 
-                        weights_dict, decisions = self._apply_risk_checks(
-                            weights_dict, spec, td, prices,
-                            accumulated_positions=accumulated_pos,
-                            daily_returns=daily_returns,
-                            current_drawdown=current_drawdown,
-                            date_to_idx=date_to_idx,
-                            price_matrix=price_matrix,
-                        )
-                        pretrade_decisions.extend(decisions)
+                    weights_dict, decisions = self._apply_risk_checks(
+                        weights_dict, spec, td, prices,
+                        accumulated_positions=accumulated_pos,
+                        daily_returns=daily_returns,
+                        current_drawdown=current_drawdown,
+                        date_to_idx=date_to_idx,
+                        price_matrix=price_matrix,
+                    )
+                    pretrade_decisions.extend(decisions)
 
-                    # Save old weights for turnover calculation
-                    old_weights = committed_weights.copy() if committed_weights else {}
+                # Save old weights for turnover calculation
+                old_weights = committed_weights.copy() if committed_weights else {}
 
-                    # Update committed weights
-                    if weights_dict:
-                        committed_weights = weights_dict.copy()
+                # Update committed weights
+                if weights_dict:
+                    committed_weights = weights_dict.copy()
 
-                    # Deduct estimated turnover cost from NAV estimate
-                    if weights_dict and nav_estimate > 0:
-                        all_assets = set(old_weights.keys()) | set(weights_dict.keys())
-                        turnover = sum(
-                            abs(weights_dict.get(a, 0) - old_weights.get(a, 0))
-                            for a in all_assets
-                        )
-                        cost_model = spec.cost_model
-                        # Estimate cost rate: commission on both sides, slippage on both,
-                        # stamp duty on sells only (approximate as half-weight)
-                        est_cost_rate = (
-                            float(cost_model.commission_rate) * 2
-                            + float(cost_model.stamp_duty_rate) * 0.5
-                            + float(cost_model.slippage_rate)
-                        )
-                        nav_estimate *= (1 - turnover * est_cost_rate)
-                        peak_nav = max(peak_nav, nav_estimate)
+                # Deduct estimated turnover cost from NAV estimate
+                if weights_dict and nav_estimate > 0:
+                    all_assets = set(old_weights.keys()) | set(weights_dict.keys())
+                    turnover = sum(
+                        abs(weights_dict.get(a, 0) - old_weights.get(a, 0))
+                        for a in all_assets
+                    )
+                    cost_model = spec.cost_model
+                    # Estimate cost rate: commission on both sides, slippage on both,
+                    # stamp duty on sells only (approximate as half-weight)
+                    est_cost_rate = (
+                        float(cost_model.commission_rate) * 2
+                        + float(cost_model.stamp_duty_rate) * 0.5
+                        + float(cost_model.slippage_rate)
+                    )
+                    nav_estimate *= (1 - turnover * est_cost_rate)
+                    peak_nav = max(peak_nav, nav_estimate)
 
                     # Always clear on rebalance, regardless of weights_dict
                     force_exited_assets.clear()

@@ -119,6 +119,79 @@ def _run(regime_sm, prices: pl.DataFrame | None = None):
     return engine.run(spec)
 
 
+class _SignalsUntil(Strategy):
+    """Emits buy-and-hold signals only before ``cutoff``; empty afterwards."""
+
+    def __init__(self, asset_ids: list[str], cutoff: date) -> None:
+        self._asset_ids = asset_ids
+        self._cutoff = cutoff
+
+    @property
+    def strategy_id(self) -> str:
+        return "regime_test_sporadic"
+
+    def generate_signals(self, ctx: StrategyContext) -> pl.DataFrame:
+        if ctx.as_of_date >= self._cutoff:
+            return pl.DataFrame(schema={
+                "asset_id": pl.String,
+                "signal_date": pl.Date,
+                "direction": pl.String,
+                "strength": pl.Float64,
+                "confidence": pl.Float64,
+            })
+        return pl.DataFrame({
+            "asset_id": self._asset_ids,
+            "signal_date": [ctx.as_of_date] * len(self._asset_ids),
+            "direction": ["long"] * len(self._asset_ids),
+            "strength": [1.0] * len(self._asset_ids),
+            "confidence": [1.0] * len(self._asset_ids),
+        })
+
+
+def _prices_with_limit_down_range(
+    asset: str, start: date, end: date,
+) -> pl.DataFrame:
+    """Two-asset drift frame where ``asset`` is limit-down every day in
+    [start, end] (close==low at exactly -10% — main-board signature)."""
+    rows: list[dict] = []
+    prev_close: dict[str, float] = {}
+    for i in range(N_DAYS):
+        d = START + timedelta(days=i)
+        for a, base in (("SH600001", 10.0), ("SH600002", 20.0)):
+            prev = prev_close.get(a, base)
+            p = base * (1 + 0.001 * i)
+            open_, high, low = p, p * 1.01, p * 0.99
+            if start <= d <= end and a == asset:
+                # limit-down vs the ACTUAL prior close (which may itself be
+                # a limit-down close on multi-day blocks)
+                p = round(prev * 0.90, 2)
+                open_ = high = low = p
+            prev_close[a] = p
+            rows.append({
+                "trade_date": d, "asset_id": a,
+                "open": open_, "high": high, "low": low,
+                "close": p, "volume": 1_000_000.0, "amount": p * 1_000_000,
+                "is_suspended": False,
+            })
+    return pl.DataFrame(rows)
+
+
+def _run_sporadic(regime_sm, cutoff: date, prices: pl.DataFrame):
+    """Like _run but the strategy stops emitting signals at ``cutoff``."""
+    engine = VectorBacktestEngine()
+    spec = BacktestSpec(
+        strategy=_SignalsUntil(["SH600001", "SH600002"], cutoff),
+        prices=prices,
+        start_date=START,
+        end_date=END,
+        initial_cash=Decimal("1_000_000"),
+        cost_model=CostModel.for_cn(),
+        rebalance_frequency="1w",
+        regime_sm=regime_sm,
+    )
+    return engine.run(spec)
+
+
 def _week_start(week: int) -> date:
     """Rebalance dates = first trading day of each week (weekly freq)."""
     return START + timedelta(days=7 * week)
@@ -215,6 +288,50 @@ class TestEngineRegime:
         )
         hist = result.regime_scale_history
         assert hist["desired_scale"].tail(1)[0] == 1.0
+
+    def test_regime_pending_survives_empty_signal_rebalance(self) -> None:
+        """B3: empty-signal rebalance day must still evaluate the regime.
+
+        Construction: scale=0 de-risk at week-1 rebalance; A's sell is
+        limit-down blocked through the rest of the week; the week-2
+        rebalance strategy returns EMPTY signals. The regime state machine
+        is still latched at scale 0, so the "regime:" pending sell for A
+        must NOT be dropped (the buggy ``regime_desired.get(td, 1.0)``
+        default reads as "recovered" on days with no evaluation entry).
+        """
+        derisk_day = _week_start(1)                 # signals still emitted here
+        empty_day = _week_start(2)                  # strategy returns no signals
+        block_start = derisk_day + timedelta(days=1)
+        block_end = empty_day - timedelta(days=1)   # A blocked until rebalance eve
+
+        prices = _prices_with_limit_down_range(
+            "SH600001", block_start, block_end,
+        )
+        sm = ScriptedRegime({derisk_day: 0.0}, sticky_zero=True)
+        result = _run_sporadic(sm, cutoff=empty_day, prices=prices)
+        assert result.error is None, result.error
+
+        # the state machine was evaluated ON the empty-signal rebalance day
+        assert empty_day in sm.calls, (
+            "regime must be evaluated on empty-signal rebalance days "
+            f"(reevaluate:daily semantics); calls={sm.calls}"
+        )
+        # ...and the latched scale-0 decision is recorded for that day
+        hist = result.regime_scale_history.filter(pl.col("trade_date") == empty_day)
+        assert hist.height == 1 and hist["desired_scale"][0] == 0.0
+
+        # the blocked de-risk sell survived the empty rebalance and filled after
+        a_sells = result.fills.filter(
+            (pl.col("asset_id") == "SH600001") & (pl.col("side") == "sell")
+        ).sort("trade_date")
+        assert a_sells.height >= 1, (
+            "regime: pending sell must be retried across the empty-signal "
+            "rebalance while the state machine is still latched at scale 0"
+        )
+        assert a_sells["trade_date"][0] >= empty_day, (
+            "A is limit-down until the rebalance eve; its first possible fill "
+            "is on/after the empty-signal rebalance day"
+        )
 
     def test_engine_holds_scale_between_rebalances(self) -> None:
         """Partial scale flows through FillSimulator as reduced weights."""

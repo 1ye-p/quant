@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cquant.datahub.universe import INDEX_EXCLUSION_SQL
+
 if TYPE_CHECKING:
     from cquant.datahub.catalog import Catalog
+
+# Anchor to the data's latest trade_date (not CURRENT_DATE) so presets still
+# resolve on stale data. Same pattern as api_server/routes/datasets.py.
+_DATA_ANCHOR_SQL = (
+    "(SELECT MAX(trade_date) FROM silver_prices_1d) - INTERVAL '30 days'"
+)
 
 
 UNIVERSE_PRESETS: dict[str, dict] = {
@@ -40,16 +48,25 @@ def resolve_universe(
 ) -> list[str] | None:
     """Resolve a universe ID to a list of asset_ids.
 
-    Returns None for 'all' (no filtering), empty list for no matches.
+    Default universe ('all' / unknown preset): all assets in the last 30 days
+    of data, excluding sector/block indices (880xxx/881xxx) — the default
+    universe never contains indices. Explicit index inclusion is opt-in via
+    the idx_* presets ("index" type below). Returns an empty list for no
+    matches.
     """
     preset = UNIVERSE_PRESETS.get(universe_id)
     if not preset or preset["type"] == "none":
-        return None
+        df = catalog.query(
+            "SELECT DISTINCT asset_id FROM silver_prices_1d "
+            f"WHERE {INDEX_EXCLUSION_SQL} AND trade_date >= {_DATA_ANCHOR_SQL}"
+        )
+        return df["asset_id"].to_list() if not df.is_empty() else []
 
     if preset["type"] == "prefix":
         df = catalog.query(
             "SELECT DISTINCT asset_id FROM silver_prices_1d "
-            "WHERE asset_id LIKE ? AND trade_date >= CURRENT_DATE - INTERVAL '30 days'",
+            f"WHERE asset_id LIKE ? AND {INDEX_EXCLUSION_SQL} "
+            f"AND trade_date >= {_DATA_ANCHOR_SQL}",
             [f"{preset['prefix']}%"],
         )
         return df["asset_id"].to_list() if not df.is_empty() else []
@@ -57,7 +74,8 @@ def resolve_universe(
     if preset["type"] == "like":
         df = catalog.query(
             "SELECT DISTINCT asset_id FROM silver_prices_1d "
-            "WHERE asset_id LIKE ? AND trade_date >= CURRENT_DATE - INTERVAL '30 days'",
+            f"WHERE asset_id LIKE ? AND {INDEX_EXCLUSION_SQL} "
+            f"AND trade_date >= {_DATA_ANCHOR_SQL}",
             [preset["pattern"]],
         )
         return df["asset_id"].to_list() if not df.is_empty() else []

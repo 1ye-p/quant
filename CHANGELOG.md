@@ -7,6 +7,17 @@
 
 ## [Unreleased]
 
+### 引擎修复 B2：universe resolver 锚定 + 指数排除，IC 过滤 — 2026-09-23
+
+**修复（高危 B2，联合评审发现）**
+- `backtest_vector/universe.py` resolver 不再锚定 `CURRENT_DATE`，改为锚定数据最新 `max(trade_date)` 回溯 30 天（与 datasets.py 同族修法）：stale 数据下 sse/cyb 等预设不再静默解析为空
+- 默认 universe（"all"/未知预设）从「返回 None 不过滤」改为返回排除板块指数（880xxx/881xxx）的资产列表；prefix/like 预设同样排除指数——显式包含指数仍通过 `idx_*` 预设（index 类型）opt-in，不受影响
+- IC 计算（`api_server/routes/factors.py` `_compute_ic` / `_compute_ic_matrix`）在因子值侧排除板块指数，IC 样本不再被指数污染
+- 指数排除谓词抽为公共常量 `cquant.datahub.universe.INDEX_EXCLUSION_SQL`（原私有 `_INDEX_EXCLUSION` 保留 alias），引擎侧 import 复用，防 datahub/引擎两层漂移
+
+**⚠️ 结果修正说明**
+- 此前默认 universe 的回测与 IC 计算结果被板块指数污染；本修复后的结果变化属**修正**，历史结果不做"顺带修正"
+
 ### Web UI 全功能增强 Batch 3 — 2026-05-15
 
 **AI 会话历史侧边栏**

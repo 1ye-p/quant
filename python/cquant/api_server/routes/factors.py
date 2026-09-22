@@ -16,6 +16,7 @@ import re
 from pydantic import BaseModel, Field, field_validator
 
 from cquant.api_server.deps import CatalogDep, run_job_async
+from cquant.datahub.universe import INDEX_EXCLUSION_SQL
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/factors", tags=["factors"])
@@ -460,10 +461,13 @@ def _compute_ic(job_id: str, body: ICComputeBody, catalog: CatalogDep) -> None:
                 f"请先在「因子研究」页面物化该因子，然后再计算 IC。"
             )
 
-        # Load factor values and next-period returns
+        # Load factor values and next-period returns. Exclude sector/block
+        # indices (880xxx/881xxx) on the factor-value side — the inner join
+        # with prices then keeps them out of the IC sample.
         factor_df = catalog.query(
             "SELECT trade_date, asset_id, value FROM gold_factor_values "
-            "WHERE feature_set_version = ? AND factor_name = ? ORDER BY trade_date, asset_id",
+            f"WHERE feature_set_version = ? AND factor_name = ? "
+            f"AND {INDEX_EXCLUSION_SQL} ORDER BY trade_date, asset_id",
             [body.feature_set_version, body.factor_name],
         )
         if factor_df.is_empty():
@@ -686,7 +690,8 @@ def _compute_ic_matrix(job_id: str, body: ICMatrixBody, catalog: CatalogDep) -> 
         for factor_name in body.factor_names:
             factor_df = catalog.query(
                 "SELECT trade_date, asset_id, value FROM gold_factor_values "
-                "WHERE feature_set_version = ? AND factor_name = ? ORDER BY trade_date, asset_id",
+                f"WHERE feature_set_version = ? AND factor_name = ? "
+                f"AND {INDEX_EXCLUSION_SQL} ORDER BY trade_date, asset_id",
                 [body.feature_set_version, factor_name],
             )
             if factor_df.is_empty():

@@ -27,7 +27,14 @@ logger = logging.getLogger(__name__)
 # bare '88' symbol prefix after the exchange tag (e.g. 'SSE:880004'). They are
 # excluded from stock universes by default to avoid polluting coverage counts
 # and cross-sectional statistics.
-_INDEX_EXCLUSION = "asset_id NOT LIKE '%:88%'"
+#
+# Public constant: engine-side consumers (backtest_vector universe resolver,
+# IC computation routes) import this to keep the exclusion predicate from
+# drifting between datahub and engine layers.
+INDEX_EXCLUSION_SQL = "asset_id NOT LIKE '%:88%'"
+
+# Backwards-compatible private alias (legacy intra-module references).
+_INDEX_EXCLUSION = INDEX_EXCLUSION_SQL
 
 
 @dataclass

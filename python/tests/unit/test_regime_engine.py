@@ -333,6 +333,107 @@ class TestEngineRegime:
             "is on/after the empty-signal rebalance day"
         )
 
+    def test_cleanup_runs_on_full_derisk_rebalance(self) -> None:
+        """B3 fix round 1: the "Always clear on rebalance" cleanup block must
+        run on a signal-day full de-risk rebalance (weights_dict == {}) too.
+
+        Construction: A is force-exited (stop-loss, full exit → cooldown)
+        mid-week; the NEXT rebalance is a regime scale→0 full de-risk (its
+        weights_dict is voided to {}). The cooldown on A must be cleared at
+        that de-risk rebalance, so when the regime recovers at the following
+        rebalance, A's signals are not filtered and A is re-bought.
+        (Regression: the B3 dedent accidentally placed the cleanup inside
+        ``if weights_dict and nav_estimate > 0:``, skipping it on full
+        de-risk rebalances.)
+        """
+        from cquant.core.enums import RiskDecisionType
+        from cquant.core.types import OrderIntent, RiskDecision, RiskSnapshot
+        from cquant.riskguard.models import RiskContext
+        from cquant.riskguard.policies.base import RiskPolicy
+        from cquant.riskguard.policies.forced_exit import (
+            ForcedExit,
+            ForcedExitPolicy,
+        )
+
+        class _StopLossDual(ForcedExitPolicy, RiskPolicy):
+            @property
+            def name(self) -> str:
+                return "test_stop_loss_dual"
+
+            def evaluate(
+                self, candidate: OrderIntent, snapshot: RiskSnapshot, ctx: RiskContext
+            ) -> RiskDecision:
+                return RiskDecision(
+                    decision=RiskDecisionType.APPROVED,
+                    original_qty=candidate.requested_qty,
+                    approved_qty=candidate.requested_qty,
+                    reasons=[],
+                    policy_names=[self.name],
+                )
+
+            def check_exits(self, positions, current_prices, entry_prices, state=None):
+                exits = []
+                for aid in positions:
+                    entry = entry_prices.get(aid, 0.0)
+                    if entry <= 0 or aid not in current_prices:
+                        continue
+                    if (current_prices[aid] - entry) / entry < -0.05:
+                        exits.append(ForcedExit(
+                            asset_id=aid, reason="stop", urgency="high",
+                        ))
+                return exits
+
+        derisk_day = _week_start(2)          # regime scale→0 rebalance
+        recover_day = _week_start(3)         # regime back to 1.0
+        next_rebalance = _week_start(4)
+        drop_day = _week_start(1) + timedelta(days=2)  # forced exit mid-week
+
+        rows: list[dict] = []
+        for i in range(N_DAYS):
+            d = START + timedelta(days=i)
+            p_a = 10.0 if d < drop_day else 8.0        # -20% after drop_day
+            p_b = 20.0 * (1 + 0.001 * i)
+            for asset, p in (("SH600001", p_a), ("SH600002", p_b)):
+                rows.append({
+                    "trade_date": d, "asset_id": asset,
+                    "open": p, "high": p * 1.01, "low": p * 0.99,
+                    "close": p, "volume": 1_000_000.0, "amount": p * 1_000_000,
+                    "is_suspended": False,
+                })
+        prices = pl.DataFrame(rows)
+
+        engine = VectorBacktestEngine()
+        spec = BacktestSpec(
+            strategy=_BuyAndHold(["SH600001", "SH600002"]),
+            prices=prices,
+            start_date=START,
+            end_date=END,
+            initial_cash=Decimal("1_000_000"),
+            cost_model=CostModel.for_cn(),
+            rebalance_frequency="1w",
+            regime_sm=ScriptedRegime({derisk_day: 0.0, recover_day: 1.0}),
+            risk_policies=[_StopLossDual()],
+        )
+        result = engine.run(spec)
+        assert result.error is None, result.error
+
+        # A was force-exited before the de-risk rebalance (sanity)
+        a_exits = [e for e in result.forced_exits if e["asset_id"] == "SH600001"]
+        assert a_exits and a_exits[0]["date"] < derisk_day
+
+        # Regression: A must be re-bought at the recovery rebalance — the
+        # de-risk rebalance (weights_dict == {}) still cleared its cooldown.
+        a_rebuys = result.fills.filter(
+            (pl.col("asset_id") == "SH600001")
+            & (pl.col("side") == "buy")
+            & (pl.col("trade_date") >= recover_day)
+            & (pl.col("trade_date") < next_rebalance)
+        )
+        assert a_rebuys.height > 0, (
+            "cooldown from A's forced exit must be cleared on the full "
+            "de-risk rebalance, allowing re-entry when the regime recovers"
+        )
+
     def test_engine_holds_scale_between_rebalances(self) -> None:
         """Partial scale flows through FillSimulator as reduced weights."""
         scale_day = _week_start(2)

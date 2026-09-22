@@ -678,22 +678,22 @@ class VectorBacktestEngine:
                     nav_estimate *= (1 - turnover * est_cost_rate)
                     peak_nav = max(peak_nav, nav_estimate)
 
-                    # Always clear on rebalance, regardless of weights_dict
-                    force_exited_assets.clear()
-                    # Regime pending sells survive rebalance re-constitution
-                    # (checklist #5: regime and forced-exit/cooldown states
-                    # never clobber each other). Regime keys are dropped only
-                    # when the regime has recovered (scale > 0) or is absent —
-                    # checklist #4: recovery refill is just the next
-                    # rebalance's natural target weights.
-                    for _k in [k for k in pending_force_exits if not k.startswith("regime:")]:
+                # Always clear on rebalance, regardless of weights_dict
+                force_exited_assets.clear()
+                # Regime pending sells survive rebalance re-constitution
+                # (checklist #5: regime and forced-exit/cooldown states
+                # never clobber each other). Regime keys are dropped only
+                # when the regime has recovered (scale > 0) or is absent —
+                # checklist #4: recovery refill is just the next
+                # rebalance's natural target weights.
+                for _k in [k for k in pending_force_exits if not k.startswith("regime:")]:
+                    del pending_force_exits[_k]
+                if spec.regime_sm is None or regime_desired.get(td, 1.0) > 0.0:
+                    for _k in [k for k in pending_force_exits if k.startswith("regime:")]:
                         del pending_force_exits[_k]
-                    if spec.regime_sm is None or regime_desired.get(td, 1.0) > 0.0:
-                        for _k in [k for k in pending_force_exits if k.startswith("regime:")]:
-                            del pending_force_exits[_k]
-                    # Rebalance fully re-constitutes positions — reset tier
-                    # ladders so re-entered assets start fresh
-                    global_stop_state["fired_tiers"].clear()
+                # Rebalance fully re-constitutes positions — reset tier
+                # ladders so re-entered assets start fresh
+                global_stop_state["fired_tiers"].clear()
 
             # Track entry prices for new positions (O(1) per asset)
             for aid in committed_weights:

@@ -3,6 +3,7 @@
  */
 
 import { api, type RequestConfig } from './client'
+import { withApiKeyParam } from './apiKey'
 
 // ── Types (not yet in types/) ────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export const advisorApi = {
   streamUrl: (message: string, sessionId?: string) => {
     const params = new URLSearchParams({ message })
     if (sessionId) params.set('session_id', sessionId)
-    return `/api/v1/advisor/stream?${params}`
+    return withApiKeyParam(`/api/v1/advisor/stream?${params}`)
   },
 }
 

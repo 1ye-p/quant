@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { RealtimeQuote } from '@/lib/api'
+import { withApiKeyParam } from '@/lib/api/apiKey'
 
 interface UseRealtimeQuoteOptions {
   symbols: string[]
@@ -36,7 +37,7 @@ export function useRealtimeQuote({
       symbols: symbols.join(','),
       interval: String(interval),
     })
-    const url = `/api/v1/live/stream?${params}`
+    const url = withApiKeyParam(`/api/v1/live/stream?${params}`)
 
     const eventSource = new EventSource(url)
     eventSourceRef.current = eventSource

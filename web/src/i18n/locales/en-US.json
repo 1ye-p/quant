@@ -227,6 +227,9 @@
         "toggle_theme": "Toggle Theme"
       }
     },
+    "auth": {
+      "unauthorized_toast": "API auth failed (401): configure the API key in Settings"
+    },
     "sizer": {
       "equal_weight": {
         "name": "Equal Weight",
@@ -3606,6 +3609,36 @@
         "desc": "Inspect the decision summary, NAV curve and risk metrics once the run completes",
         "action": "Open backtest detail"
       }
+    },
+    "settings": {
+      "title": "Settings",
+      "subtitle": "API key and local client configuration",
+      "api_key_card": {
+        "title": "API Key",
+        "desc": "When the server enforces authentication, every API request must carry the Bearer key. The key is stored in this browser (localStorage) and takes effect immediately — no reload needed."
+      },
+      "server": {
+        "key_configured": "Server key configured",
+        "key_not_configured": "No server key (auth not required)",
+        "mode_strict": "Mode: strict",
+        "mode_dev": "Mode: dev (non-trading endpoints open)"
+      },
+      "local": {
+        "saved": "Key saved on this device",
+        "not_saved": "No key saved on this device"
+      },
+      "placeholder_key": "Paste API key (32 chars)…",
+      "btn_save": "Save",
+      "btn_test": "Test",
+      "btn_testing": "Testing...",
+      "btn_clear": "Clear",
+      "toast_saved": "API key saved — requests will carry it automatically",
+      "toast_cleared": "Saved API key cleared",
+      "toast_valid": "Key is valid — authentication OK",
+      "toast_invalid": "Key invalid or server auth not enabled: {{message}}",
+      "error_empty": "Please enter an API key",
+      "hint_generate": "Generate a key on the server with the command below, then set it as CQUANT_API_KEY in .env:",
+      "note_trading": "Note: once the server has a key configured, all features (including the trading center) require authentication; SSE connections (realtime quotes / AI advisor) pass the key via URL parameter automatically."
     }
   }
 }

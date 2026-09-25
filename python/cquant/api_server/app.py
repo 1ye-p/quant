@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 
 from cquant.api_server.routes import (
     advisor,
+    auth,
     backtests,
     datasets,
     demo,
@@ -226,6 +227,9 @@ def create_app(
 
     prefix = "/api/v1"
     app.include_router(health.router)
+    # /auth/status is public (key_configured flag only, no secret); the
+    # protected /auth/verify route applies verify_api_key at route level.
+    app.include_router(auth.router, prefix=prefix)
     # /metrics is intentionally unauthenticated so Prometheus can scrape it
     # without an API key; restrict it at the reverse proxy in production.
     app.include_router(metrics.router)

@@ -227,6 +227,9 @@
         "toggle_theme": "切换主题"
       }
     },
+    "auth": {
+      "unauthorized_toast": "API 认证失败（401）：请在设置页配置 API Key"
+    },
     "sizer": {
       "equal_weight": {
         "name": "等权",
@@ -3606,6 +3609,36 @@
         "desc": "回测完成后查看决策摘要、净值曲线与风险指标",
         "action": "查看回测详情"
       }
+    },
+    "settings": {
+      "title": "设置",
+      "subtitle": "API Key 与本地客户端配置",
+      "api_key_card": {
+        "title": "API Key",
+        "desc": "服务端启用认证后，所有 API 请求需携带 Bearer Key。Key 保存在本浏览器（localStorage），保存后立即生效，无需刷新页面。"
+      },
+      "server": {
+        "key_configured": "服务端已配置 Key",
+        "key_not_configured": "服务端未配置 Key（当前无需认证）",
+        "mode_strict": "模式：strict",
+        "mode_dev": "模式：dev（非交易端点免认证）"
+      },
+      "local": {
+        "saved": "本机已保存 Key",
+        "not_saved": "本机未保存 Key"
+      },
+      "placeholder_key": "粘贴 API Key（32 位）…",
+      "btn_save": "保存",
+      "btn_test": "测试连接",
+      "btn_testing": "测试中...",
+      "btn_clear": "清除",
+      "toast_saved": "API Key 已保存，后续请求将自动携带",
+      "toast_cleared": "已清除本机保存的 API Key",
+      "toast_valid": "Key 有效，认证通过",
+      "toast_invalid": "Key 无效或服务端未启用认证：{{message}}",
+      "error_empty": "请输入 API Key",
+      "hint_generate": "在服务器上运行以下命令生成 Key，并写入 .env 的 CQUANT_API_KEY：",
+      "note_trading": "提示：服务端配置 Key 后，交易中心等所有功能都需要认证；SSE 连接（实时行情 / AI 助手）会自动通过 URL 参数传递 Key。"
     }
   }
 }

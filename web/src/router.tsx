@@ -48,6 +48,7 @@ const AlertsPage    = named(() => import('@/pages/AlertsPage'), 'AlertsPage')
 const TasksPage     = named(() => import('@/pages/TasksPage'), 'TasksPage')
 const PipelinePage  = named(() => import('@/pages/PipelinePage'), 'PipelinePage')
 const SharePage     = named(() => import('@/pages/SharePage'), 'SharePage')
+const SettingsPage  = named(() => import('@/pages/SettingsPage'), 'SettingsPage')
 
 export const router = createBrowserRouter([
   {
@@ -106,6 +107,7 @@ export const router = createBrowserRouter([
       { path: 'tasks',      element: <TasksPage /> },
       { path: 'pipeline',   element: <PipelinePage /> },
       { path: 'share/:shareId', element: <SharePage /> },
+      { path: 'settings',   element: <SettingsPage /> },
     ],
   },
   {

@@ -14,7 +14,7 @@ design: an unconfigured deployment is an unreachable deployment.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CQUANT_API_KEY` | *(unset)* | API key. All requests must send `Authorization: Bearer <key>`. |
+| `CQUANT_API_KEY` | *(unset)* | API key. All requests must send `Authorization: Bearer <key>` (or `?api_key=` for SSE). |
 | `CQUANT_AUTH_MODE` | `strict` | `dev` allows unauthenticated access to non-trading endpoints when no key is set (one-time warning logged). |
 
 ### Key Generation
@@ -28,6 +28,31 @@ export CQUANT_API_KEY='<key>'
 
 Clients then send `Authorization: Bearer <key>` on every request. Comparison
 uses `hmac.compare_digest` (constant-time).
+
+### Web Frontend (Settings page)
+
+The bundled React frontend ships an API-key entry in **设置 (Settings)**:
+
+1. Generate a key on the server (see above) and set `CQUANT_API_KEY` in `.env`.
+2. Restart the API server, open the web UI → 系统组 → 设置.
+3. Paste the key once — it is stored in the browser's `localStorage` and
+   attached automatically as a Bearer header on every request. No reload
+   needed after saving; use 测试连接 (Test) to verify against the server.
+
+Two auxiliary endpoints support this flow:
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /api/v1/auth/status` | public | Reports `key_configured` + `mode` so the UI can guide configuration. Never returns the key. |
+| `GET /api/v1/auth/verify` | required | Returns 200 when the presented credential is valid (the Test button). |
+
+### SSE connections (`?api_key=` fallback)
+
+Browser `EventSource` (used by realtime quotes `/live/stream` and the AI
+advisor `/advisor/stream`) cannot set request headers. For these connections
+the key may be passed as the `api_key` query parameter; the header always
+takes precedence when both are present. Prefer the header for everything else
+— query strings can leak into access logs.
 
 ### Dev Mode (local development only)
 

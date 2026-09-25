@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mlApi, backtestsApi, scoringApi, alertsApi, jobsApi } from '@/lib/api'
+import { UNAUTHORIZED_EVENT } from '@/lib/api/apiKey'
 import { elapsedStr } from '@/lib/utils'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { LanguageSwitcher } from '@/components/common/LanguageSwitcher'
@@ -32,6 +33,7 @@ const NAV_ICONS: Record<string, string> = {
   '/alerts':    '🔔',
   '/tasks':     '📋',
   '/pipeline':  '🔄',
+  '/settings':  '🔧',
 }
 
 function useNavGroups() {
@@ -73,6 +75,7 @@ function useNavGroups() {
         { to: '/tasks',    label: t('common.nav.tasks', '任务管理') },
         { to: '/alerts',   label: t('common.nav.alerts', '告警中心') },
         { to: '/pipeline', label: t('common.nav.pipeline', '自动化管道') },
+        { to: '/settings', label: t('common.nav.settings', '设置') },
       ],
     },
   ]
@@ -94,6 +97,18 @@ export function AppLayout() {
   const { currentWorkflow, currentStep, steps, nextStep, prevStep, reset: resetWorkflow } = useWorkflowStore()
   const isRelevantPage = ['/ml', '/backtests', '/scoring', '/tasks'].includes(location.pathname)
   const pollInterval = isRelevantPage ? 10_000 : 60_000
+
+  // 401 → 引导到设置页配置 API Key（client 层已做 10s 去重，这里只会收到一次）
+  useEffect(() => {
+    const onUnauthorized = () => {
+      toast.error(t('common.auth.unauthorized_toast'), {
+        action: { label: t('common.nav.settings'), onClick: () => navigate('/settings') },
+        duration: 10_000,
+      })
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+  }, [t, navigate])
 
   const stopTaskMutation = useMutation({
     mutationFn: (jobId: string) => jobsApi.cancel(jobId),

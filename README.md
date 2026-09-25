@@ -117,6 +117,10 @@ TUSHARE_TOKEN=<your-token>        # https://tushare.pro/register
 # AI 助手（选填，用于 AI Advisor 功能）
 ANTHROPIC_API_KEY=<sk-ant-xxx>    # https://console.anthropic.com/
 OPENAI_API_KEY=<sk-xxx>           # 备用，可不填
+
+# 平台 API 认证（推荐）：生成后前端在「设置」页粘贴一次
+# python -m cquant.cli.main auth generate-key
+CQUANT_API_KEY=<32位key>          # 详见 docs/security.md
 ```
 
 > `.env` 已被 `.gitignore` 排除，不会提交到 Git。
@@ -303,6 +307,7 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 
 ## 安全说明
 
+- API Server 默认 fail-closed 认证：未配置 `CQUANT_API_KEY` 时所有 `/api/v1/*` 端点返回 503；配置后需 Bearer 认证（前端在「设置」页粘贴 Key，交易中心等功能需认证后可用）。详见 [docs/security.md](docs/security.md)
 - AI Advisor 仅支持离线研究分析，`SafetyPolicy` 拦截所有真实交易指令
 - `.env` 已排除在版本控制之外，请勿将真实 API Key 写入代码或文档
 - 本项目不提供投资建议，策略回测结果不代表未来收益

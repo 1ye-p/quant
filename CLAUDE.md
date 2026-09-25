@@ -177,6 +177,8 @@ python -m cquant.cli.main backtest --dataset-version tdx_bulk_v1 --strategy-id t
 | `TUSHARE_TOKEN` | 否 | Tushare Pro API Token（datahub CN 数据源） |
 | `ANTHROPIC_API_KEY` | 否 | Claude API Key（ai_advisor，Phase 3） |
 | `OPENAI_API_KEY` | 否 | OpenAI API Key（ai_advisor 备用，Phase 3） |
+| `CQUANT_API_KEY` | 否 | 平台 API 访问令牌（api_server Bearer 认证；设置后前端需在「设置」页配置。生成：`cquant auth generate-key`，详见 docs/security.md） |
+| `CQUANT_AUTH_MODE` | 否 | 认证模式：`strict`（默认，未设 Key 时全站 503）/ `dev`（本地开发，未设 Key 时放行非交易端点）。设置 `CQUANT_API_KEY` 后此变量无效 |
 
 ---
 

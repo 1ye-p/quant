@@ -282,6 +282,12 @@ def verify_api_key(
     Escape hatch: ``CQUANT_AUTH_MODE=dev`` restores the historical permissive
     behavior for local development (non-trading endpoints pass with a one-time
     warning; trading endpoints still require a key).
+
+    Credential sources (first match wins):
+    1. ``Authorization: Bearer <key>`` header — preferred for all fetch/XHR.
+    2. ``?api_key=<key>`` query parameter — fallback for ``EventSource`` SSE
+       connections (browser API cannot set request headers). Prefer the
+       header whenever the client supports it.
     """
     global _auth_warned
     mode = os.getenv("CQUANT_AUTH_MODE", "strict")
@@ -302,7 +308,12 @@ def verify_api_key(
             )
             _auth_warned = True
         return
-    if credentials is None or not hmac.compare_digest(credentials.credentials, api_key):
+    presented = (
+        credentials.credentials
+        if credentials is not None
+        else request.query_params.get("api_key", "")
+    )
+    if not presented or not hmac.compare_digest(presented, api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key. Use Authorization: Bearer <key>",

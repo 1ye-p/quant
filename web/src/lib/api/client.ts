@@ -15,6 +15,7 @@ import {
   createApiErrorFromResponse,
   isRetryableError,
 } from './errors'
+import { getApiKey, notifyUnauthorized } from './apiKey'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,10 @@ export async function request<T>(path: string, config: RequestConfig = {}): Prom
     if (!isFormData && !baseHeaders.has('Content-Type')) {
       baseHeaders.set('Content-Type', 'application/json')
     }
+    const apiKey = getApiKey()
+    if (apiKey && !baseHeaders.has('Authorization')) {
+      baseHeaders.set('Authorization', `Bearer ${apiKey}`)
+    }
 
     const res = await fetch(`${BASE}${path}`, {
       ...init,
@@ -104,6 +109,9 @@ export async function request<T>(path: string, config: RequestConfig = {}): Prom
 
     // Handle non-OK responses
     if (!res.ok) {
+      if (res.status === 401) {
+        notifyUnauthorized()
+      }
       throw await createApiErrorFromResponse(res)
     }
 

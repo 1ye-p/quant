@@ -88,3 +88,69 @@ class TestKeySet:
         monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
         resp = client.get("/api/v1/datasets")
         assert resp.status_code == 401
+
+
+class TestQueryParamFallback:
+    """EventSource cannot set headers — ?api_key= is the SSE credential path."""
+
+    def test_query_param_key_passes(self, client: TestClient, monkeypatch) -> None:
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
+        resp = client.get("/api/v1/datasets?api_key=strict-test-key")
+        assert resp.status_code == 200
+
+    def test_wrong_query_param_returns_401(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
+        resp = client.get("/api/v1/datasets?api_key=wrong-key")
+        assert resp.status_code == 401
+
+    def test_header_takes_precedence_over_query_param(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        """凭据冲突时以 Header 为准（query param 仅作 EventSource 回退）。"""
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
+        resp = client.get(
+            "/api/v1/datasets?api_key=wrong-key",
+            headers={"Authorization": "Bearer strict-test-key"},
+        )
+        assert resp.status_code == 200
+
+
+class TestAuthEndpoints:
+    """/auth/status 公开探测 + /auth/verify 凭据校验。"""
+
+    def test_status_public_and_reports_state(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.setenv("CQUANT_AUTH_MODE", "strict")
+        resp = client.get("/api/v1/auth/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"key_configured": True, "mode": "strict"}
+        assert "strict-test-key" not in resp.text  # never disclose the key
+
+    def test_verify_ok_with_valid_key(self, client: TestClient, monkeypatch) -> None:
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
+        resp = client.get(
+            "/api/v1/auth/verify",
+            headers={"Authorization": "Bearer strict-test-key"},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    def test_verify_rejects_invalid_key(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CQUANT_API_KEY", "strict-test-key")
+        monkeypatch.delenv("CQUANT_AUTH_MODE", raising=False)
+        resp = client.get(
+            "/api/v1/auth/verify",
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert resp.status_code == 401

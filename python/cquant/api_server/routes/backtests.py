@@ -168,6 +168,23 @@ def _save_job(catalog, job_id: str, job_type: str, status: str,
         logger.warning("Failed to persist job %s: %s", job_id, exc)
 
 
+def _job_ts(value) -> str:
+    """Normalize _api_jobs timestamps for API export.
+
+    _api_jobs.created_at/updated_at are naive TIMESTAMP columns: the aware-UTC
+    values written by _save_job lose their offset on insert. Export them with
+    an explicit +00:00 so frontend ``new Date()`` parsing doesn't misread UTC
+    wall-clock digits as local time (8h display skew on UTC+8 machines).
+    """
+    if value is None:
+        return ""
+    s = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    t = s.find("T")
+    if t > 0 and "+" not in s[t:] and not s.endswith("Z"):
+        s += "+00:00"
+    return s
+
+
 def _load_job(catalog, job_id: str) -> dict | None:
     """Load a job record from DuckDB. Returns None if not found."""
     try:
@@ -726,7 +743,7 @@ async def list_backtests(
                 "engine": "",
                 "strategy_id": "",
                 "dataset_version": "",
-                "started_at": row.get("created_at", ""),
+                "started_at": _job_ts(row.get("created_at")),
                 "completed_at": None,
                 "status": row["status"],
                 "error": row.get("error"),
@@ -2947,8 +2964,8 @@ async def get_sensitivity_history(run_id: str, catalog: CatalogDep) -> dict:
             rows.append({
                 "job_id": row["job_id"],
                 "status": row["status"],
-                "created_at": row["created_at"],
-                "completed_at": row["updated_at"] if row["status"] in ("completed", "failed") else None,
+                "created_at": _job_ts(row["created_at"]),
+                "completed_at": _job_ts(row["updated_at"]) if row["status"] in ("completed", "failed") else None,
                 "error": row.get("error"),
             })
         return {"history": rows}

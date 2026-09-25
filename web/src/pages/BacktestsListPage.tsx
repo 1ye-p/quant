@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { backtestsApi, jobsApi } from '@/lib/api'
 import type { BacktestListParams } from '@/lib/api/backtests'
 import { queryKeys } from '@/lib/queryKeys'
+import { formatApiDateTime } from '@/lib/utils'
 import { toast } from 'sonner'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
@@ -331,8 +332,8 @@ export function BacktestsListPage() {
                         : <span className="text-gray-500">{r.engine}</span>}
                   </td>
                   <td className="table-td"><StatusBadge status={r.status} /></td>
-                  <td className="table-td text-gray-400">{r.started_at?.slice(0, 16) ?? '-'}</td>
-                  <td className="table-td text-gray-400">{r.completed_at?.slice(0, 16) ?? '-'}</td>
+                  <td className="table-td text-gray-400">{formatApiDateTime(r.started_at)}</td>
+                  <td className="table-td text-gray-400">{formatApiDateTime(r.completed_at)}</td>
                   <td className="table-td font-mono text-xs">
                     {r.metrics?.sharpe_ratio != null ? r.metrics.sharpe_ratio.toFixed(2) : '-'}
                   </td>

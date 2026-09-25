@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { datasetsApi, backtestsApi, knowledgeApi, liveApi, dashboardApi, realtimeApi, alertsApi } from '@/lib/api'
 import { queryKeys, extendedQueryKeys } from '@/lib/queryKeys'
 import { StatusBadge } from '@/components/ui/StatusBadge'
+import { formatApiDateTime } from '@/lib/utils'
 import { SparkLine } from '@/components/ui/SparkLine'
 
 function ErrorCard({ titleKey, error }: { titleKey: string; error: Error | null }) {
@@ -393,7 +394,7 @@ export function OverviewPage() {
                   <td className="table-td font-medium">{r.strategy_id}</td>
                   <td className="table-td text-gray-500">{r.engine}</td>
                   <td className="table-td"><StatusBadge status={r.status} /></td>
-                  <td className="table-td text-gray-400">{r.started_at?.slice(0, 16) ?? '—'}</td>
+                  <td className="table-td text-gray-400">{formatApiDateTime(r.started_at)}</td>
                 </tr>
               ))}
             </tbody>

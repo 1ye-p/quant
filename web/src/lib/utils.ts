@@ -7,6 +7,22 @@ export function cn(...inputs: (string | false | null | undefined)[]): string {
   return inputs.filter(Boolean).join(' ')
 }
 
+/**
+ * Format an API timestamp in the browser's local timezone as "YYYY-MM-DD HH:mm".
+ *
+ * Accepts ISO strings with an explicit offset ("+08:00"/"Z" — converted to
+ * local) or without one (interpreted as local wall-clock, e.g. naive
+ * `datetime.now()` values from meta_scoring_runs). Never slice the raw string:
+ * UTC wall-clock digits would display verbatim and look 8h off on UTC+8.
+ */
+export function formatApiDateTime(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '-'
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 /** Format elapsed seconds since a timestamp as human-readable string. */
 export function elapsedStr(startedAt: string | number | undefined): string {
   if (!startedAt) return '—'

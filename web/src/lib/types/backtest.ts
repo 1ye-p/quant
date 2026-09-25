@@ -52,6 +52,8 @@ export const BacktestSchema = z.object({
   status: z.string(),
   strategy_type: z.string().optional(),
   is_running_job: z.boolean().optional(),
+  /** Raw run tags (JSON string from DuckDB; parsed defensively by consumers). */
+  tags: z.string().nullable().optional(),
   metrics: BacktestMetricsSchema.optional(),
 })
 

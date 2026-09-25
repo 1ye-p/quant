@@ -96,12 +96,14 @@ class TestGenerateReport:
         job = c.get(f"/api/v1/backtests/jobs/{job_id}").json()
         assert job["status"] == "completed"
 
-        # Markdown persisted to gold_research_reports
+        # Markdown persisted to gold_research_reports (agent text + chart
+        # spec markers appended by _append_report_charts)
         report_inserts = [p for s, p in cat._inserts if "gold_research_reports" in s and "CREATE" not in s]
         assert report_inserts, "expected INSERT INTO gold_research_reports"
         params = report_inserts[-1]
         assert params[1] == "run-123"
-        assert params[2] == STUB_MD
+        assert params[2].startswith(STUB_MD)
+        assert "[CHART:metric_cards:" in params[2]
 
         # Knowledge-base mirror invoked (spy)
         assert len(kb.ingest_calls) == 1
@@ -115,7 +117,8 @@ class TestGenerateReport:
         assert resp.status_code == 200
         body = resp.json()
         assert body["run_id"] == "run-123"
-        assert body["content_md"] == STUB_MD
+        assert body["content_md"].startswith(STUB_MD)
+        assert "[CHART:metric_cards:" in body["content_md"]
         assert body["report_id"]
 
     def test_post_missing_run_404(self, client, monkeypatch) -> None:
@@ -150,3 +153,61 @@ class TestFallbackWriter:
         assert "回测研究报告" in md
         assert "12.34%" in md
         assert "0.97" in md
+
+
+class TestReportCharts:
+    """Backlog #6: chart_generator wired into the report path."""
+
+    @staticmethod
+    def _catalog_with_nav(nav_rows: list[tuple[str, float]] | None):
+        from unittest.mock import MagicMock
+
+        cat = MagicMock()
+
+        def mock_query(sql, params=None):
+            if "gold_portfolio_snapshots" in sql:
+                if nav_rows:
+                    return pl.DataFrame({
+                        "trade_date": [d for d, _ in nav_rows],
+                        "nav": [v for _, v in nav_rows],
+                    })
+                return pl.DataFrame()
+            return pl.DataFrame()
+
+        cat.query.side_effect = mock_query
+        return cat
+
+    def test_appends_metric_cards_and_nav_line(self) -> None:
+        from datetime import date
+
+        cat = self._catalog_with_nav([(date(2025, 1, 2), 1.0), (date(2025, 1, 3), 1.01)])
+        meta = {
+            "run_id": "r1",
+            "metrics": {"total_return": 0.1, "sharpe_ratio": 1.2,
+                        "max_drawdown": -0.05, "win_rate": 0.6},
+        }
+        out = bt_routes._append_report_charts(cat, "# 报告\n正文", meta)
+        assert out.startswith("# 报告\n正文")
+        assert "[CHART:metric_cards:" in out
+        assert "[CHART:line:" in out
+        # markers parse back via ChartGenerator
+        from cquant.ai_advisor.chart_generator import ChartGenerator
+
+        markers = ChartGenerator.parse_markers(out)
+        types = {m["chart_type"] for m in markers}
+        assert types == {"metric_cards", "line"}
+
+    def test_no_snapshots_still_emits_metric_cards(self) -> None:
+        cat = self._catalog_with_nav(None)
+        meta = {"run_id": "r1", "metrics": {}}
+        out = bt_routes._append_report_charts(cat, "text-only", meta)
+        assert "[CHART:metric_cards:" in out
+        assert "[CHART:line:" not in out
+
+    def test_failure_keeps_text_report(self) -> None:
+        from unittest.mock import MagicMock
+
+        cat = MagicMock()
+        cat.query.side_effect = RuntimeError("boom")
+        out = bt_routes._append_report_charts(cat, "keep me", {"run_id": "r1"})
+        assert out == "keep me"

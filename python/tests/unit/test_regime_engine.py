@@ -224,6 +224,38 @@ class TestEngineRegime:
         # and exposure is actually liquidated eventually (actual catches up)
         assert (hist["actual_scale"].tail(3) < 0.05).any()
 
+    def test_regime_full_derisk_logged_in_forced_exits(self) -> None:
+        """Backlog #5: scale→0 full de-risk appears in result.forced_exits
+        (reason="regime_risk_off"), one entry per committed position."""
+        derisk_day = _week_start(2)
+        result = _run(ScriptedRegime({derisk_day: 0.0}, sticky_zero=True))
+        assert result.error is None, result.error
+
+        regime_entries = [
+            e for e in result.forced_exits if e["reason"] == "regime_risk_off"
+        ]
+        assert regime_entries, "full de-risk must be visible in the exit feed"
+        by_date = {e["date"] for e in regime_entries}
+        assert by_date == {derisk_day}, (
+            f"entries expected exactly on the de-risk rebalance day; got {by_date}"
+        )
+        logged_assets = {e["asset_id"] for e in regime_entries}
+        assert logged_assets == {"SH600001", "SH600002"}
+        for e in regime_entries:
+            assert e["entry_price"] > 0
+            assert e["exit_price"] > 0
+        # cooldown exemption: regime de-risk does NOT poison re-entry — the
+        # next rebalance after the scale recovers to 1.0 may re-buy (no
+        # force_exited_assets entries are created by the regime branch).
+        result2 = _run(ScriptedRegime({derisk_day: 0.0}, sticky_zero=False))
+        assert result2.error is None, result2.error
+        rebuys = result2.fills.filter(
+            (pl.col("side") == "buy") & (pl.col("trade_date") > derisk_day)
+        )
+        assert rebuys.height > 0, (
+            "recovery rebalance must be able to re-enter (cooldown-exempt)"
+        )
+
     def test_regime_t1_blocked_reinjection(self) -> None:
         """Checklist #2: limit-down blocks the de-risk sell → retry next days.
 

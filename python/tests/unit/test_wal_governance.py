@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -130,6 +131,84 @@ class TestPeriodicCheckpoint:
             cat.close()
 
 
+class TestCloseRaceGuard:
+    """Backlog #3: close() must not yank the backend under a busy CHECKPOINT."""
+
+    def test_close_skips_backend_when_checkpoint_thread_stuck(
+        self, tmp_path: Path, monkeypatch
+    ):
+        import cquant.datahub.catalog as catalog_mod
+
+        db = tmp_path / "cat.duckdb"
+        monkeypatch.setenv("CQUANT_CHECKPOINT_INTERVAL_SEC", "0.05")
+        monkeypatch.setattr(catalog_mod, "_CLOSE_JOIN_TIMEOUT_SEC", 0.2)
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_checkpoint(_self):
+            # Simulate a CHECKPOINT that outlives the close() join timeout
+            entered.set()
+            release.wait(timeout=10)
+
+        cat = Catalog(db_path=db, repo_root=REPO_ROOT)
+        assert cat._checkpoint_thread is not None
+        monkeypatch.setattr(type(cat), "checkpoint", slow_checkpoint)
+
+        closed_backend = False
+        original_close = cat._backend.close
+
+        def spying_close():
+            nonlocal closed_backend
+            closed_backend = True
+            original_close()
+
+        cat._backend.close = spying_close
+
+        # Wait until the thread is INSIDE slow_checkpoint, then close —
+        # the thread cannot exit until release is set, so the join must
+        # time out deterministically.
+        assert entered.wait(timeout=5), "checkpoint thread never started"
+        try:
+            cat.close()
+            assert cat._checkpoint_thread.is_alive(), (
+                "test precondition: checkpoint thread should still be busy"
+            )
+            assert not closed_backend, (
+                "close() must skip backend.close() when the checkpoint "
+                "thread did not join in time"
+            )
+            # backend still usable — the connection was not aborted
+            cat.execute("CREATE TABLE IF NOT EXISTS still_alive (x INTEGER)")
+        finally:
+            release.set()
+            cat._checkpoint_thread.join(timeout=5)
+            if not closed_backend:
+                cat._backend.close = original_close
+                cat.close()
+
+    def test_close_closes_backend_when_thread_joins(self, tmp_path: Path, monkeypatch):
+        """Sanity: with a fast (real) checkpoint, close() still closes the backend."""
+        import cquant.datahub.catalog as catalog_mod
+
+        db = tmp_path / "cat.duckdb"
+        monkeypatch.setenv("CQUANT_CHECKPOINT_INTERVAL_SEC", "0.2")
+        monkeypatch.setattr(catalog_mod, "_CLOSE_JOIN_TIMEOUT_SEC", 5.0)
+        cat = Catalog(db_path=db, repo_root=REPO_ROOT)
+        _write_rows(cat)
+        closed = {"v": False}
+        original_close = cat._backend.close
+
+        def spying_close():
+            closed["v"] = True
+            original_close()
+
+        cat._backend.close = spying_close
+        cat.close()
+        assert closed["v"] is True
+        assert not cat._checkpoint_thread.is_alive()
+
+
 class TestSelfHeal:
     def test_self_heal_corrupt_wal(self, tmp_path: Path):
         db = tmp_path / "cat.duckdb"
@@ -163,6 +242,11 @@ class TestSelfHeal:
             "IO Error: No such file or directory",
             "PermissionError: [Errno 13] Permission denied",
             "Catalog Error: Table with name foo does not exist",
+            # Backlog #2: generic internal errors must NOT match — the old
+            # "internal error" signature quarantined healthy WALs on
+            # unrelated DuckDB internals.
+            "Internal Error: Invalid Input Error: header mismatch in parquet",
+            "Internal Error: dwarf::Reader: invalid abbreviation",
         ]
         for msg in benign:
             assert not _is_wal_corruption_error(Exception(msg)), msg
@@ -170,6 +254,7 @@ class TestSelfHeal:
             'IO Error: Failure while replaying WAL file "x.wal": Corrupt WAL file: '
             "entry at byte position 4199 computed checksum 1 does not match stored checksum 2",
             "Internal Error: WriteAheadLog deserialization failed",
+            "IO Error: WAL replay failed for block 42",
         ]
         for msg in corrupt:
             assert _is_wal_corruption_error(Exception(msg)), msg

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import duckdb
 import polars as pl
@@ -147,3 +148,44 @@ def test_preview_qlib_expression_gets_hint(catalog: StubCatalog) -> None:
     resp = asyncio.run(factors_routes.preview_custom_factor(body=body, catalog=catalog))
     assert resp["valid"] is False
     assert "Qlib" in (resp["error"] or "")
+
+
+# ── Backlog #7: DDL moved to sql/duckdb/factors.sql ─────────────────────────
+
+def test_ic_summary_ddl_loaded_by_catalog_initialize(tmp_path) -> None:
+    """Catalog.initialize() (via _DDL_FILES) creates gold_factor_ic_summary."""
+    from cquant.datahub.catalog import Catalog
+
+    repo_root = Path(__file__).resolve().parents[3]
+    cat = Catalog(db_path=tmp_path / "ddl.duckdb", repo_root=repo_root)
+    cat.initialize()
+    cols = cat.query(
+        "SELECT column_name FROM duckdb_columns() "
+        "WHERE table_name = 'gold_factor_ic_summary' ORDER BY column_index"
+    )["column_name"].to_list()
+    assert cols == [
+        "factor_name", "ic_mean", "icir", "ic_positive_pct", "n",
+        "window_start", "window_end", "updated_at",
+    ]
+    cat.close()
+
+
+def test_ensure_ic_summary_table_loads_from_sql_file(tmp_path) -> None:
+    """Route-level ensure path reads sql/duckdb/factors.sql (equivalent DDL)."""
+    class _PathCatalog(StubCatalog):
+        """Stub + repo_root pointing at the real repo (like Catalog)."""
+
+        def __init__(self, repo_root: Path) -> None:
+            super().__init__()
+            self.repo_root = repo_root
+
+    repo_root = Path(__file__).resolve().parents[3]
+    cat = _PathCatalog(repo_root)
+    factors_routes._ensure_ic_summary_table(cat)
+    cols = cat.query(
+        "SELECT column_name FROM duckdb_columns() "
+        "WHERE table_name = 'gold_factor_ic_summary' ORDER BY column_index"
+    )["column_name"].to_list()
+    assert cols, "ensure path must create the table from sql/duckdb/factors.sql"
+    assert "factor_name" in cols and "updated_at" in cols
+    factors_routes._ic_summary_table_ensured = False

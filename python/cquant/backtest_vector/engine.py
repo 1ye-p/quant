@@ -620,6 +620,26 @@ class VectorBacktestEngine:
                         weights_dict = {}
                         for aid in list(committed_weights.keys()):
                             pending_force_exits[f"regime:{aid}"] = 0.0
+                            # Record the de-risk in the exit feed (backlog
+                            # #5): same shape as the forced-exit log below,
+                            # so regime de-risking is visible to consumers
+                            # of result.forced_exits. No force_exited_assets
+                            # entry — regime exits stay cooldown-exempt
+                            # (recovery refill is the next rebalance).
+                            ep = entry_prices.get(aid, 0)
+                            cp = (
+                                self._get_price_on_date(aid, td, date_to_idx, price_matrix)
+                                or 0
+                            )
+                            forced_exit_log.append({
+                                "date": td,
+                                "asset_id": aid,
+                                "reason": "regime_risk_off",
+                                "urgency": "high",
+                                "entry_price": ep,
+                                "exit_price": cp,
+                                "loss_pct": (cp - ep) / ep if ep else 0,
+                            })
                             # Immediately stop counting the position
                             # (mirrors forced-exit full-exit semantics)
                             del committed_weights[aid]

@@ -31,6 +31,7 @@ _DDL_FILES = [
     "sql/duckdb/silver.sql",
     "sql/duckdb/news.sql",
     "sql/duckdb/analysis.sql",
+    "sql/duckdb/factors.sql",
     "sql/duckdb/gold.sql",
     "sql/duckdb/knowledge.sql",
     "sql/duckdb/meta.sql",
@@ -41,16 +42,22 @@ _DDL_FILES = [
 #    computed checksum ... does not match stored checksum ..."
 #   "Internal Error: ... WriteAheadLog ..."
 # Deliberately narrow: plain IO errors (missing file, permissions, directory)
-# must NOT match — see test_self_heal_no_false_positive.
+# and generic internal errors must NOT match — quarantining a healthy WAL
+# discards un-checkpointed writes — see test_self_heal_no_false_positive.
+# ("internal error" was removed: it matched non-WAL DuckDB internals too.)
 _WAL_CORRUPTION_SIGNATURES = (
     "writeaheadlog",
     "wal file",
     "replaying wal",
     "replay wal",
-    "internal error",
+    "wal replay",
 )
 
 _DEFAULT_CHECKPOINT_INTERVAL_SEC = 600.0
+
+# How long close() waits for the checkpoint thread before giving up on
+# backend.close() (see Catalog.close).
+_CLOSE_JOIN_TIMEOUT_SEC = 5.0
 
 
 def _is_wal_corruption_error(exc: Exception) -> bool:
@@ -539,17 +546,37 @@ CREATE TABLE IF NOT EXISTS meta_model_registry (
         """Read all entries from the model registry."""
         return self.query("SELECT * FROM meta_model_registry")
 
+    @property
+    def repo_root(self) -> Path:
+        """Repository root used to resolve ``sql/duckdb`` DDL files."""
+        return self._repo_root
+
     def close(self) -> None:
         """Stop the checkpoint thread and close the backend connection.
 
         DuckDB checkpoints (and removes) the WAL file on clean connection
         close, so closing the catalog is what keeps ``catalog.duckdb.wal``
         from lingering between runs.
+
+        If the checkpoint thread is still busy after the join timeout (e.g.
+        a CHECKPOINT taking > ``_CLOSE_JOIN_TIMEOUT_SEC``), the backend is
+        NOT closed — yanking the connection out from under an in-flight
+        CHECKPOINT is worse than leaking it. The condition is logged at
+        ERROR so operators notice.
         """
         if self._stop_event is not None:
             self._stop_event.set()
         if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
-            self._checkpoint_thread.join(timeout=5)
+            self._checkpoint_thread.join(timeout=_CLOSE_JOIN_TIMEOUT_SEC)
+            if self._checkpoint_thread.is_alive():
+                logger.error(
+                    "Catalog.close(): checkpoint thread still busy after "
+                    "%.1fs join — skipping backend.close() for %s to avoid "
+                    "aborting an in-flight CHECKPOINT; connection left open "
+                    "(caller should retry close later)",
+                    _CLOSE_JOIN_TIMEOUT_SEC, self._db_path,
+                )
+                return
         self._backend.close()
 
     def __enter__(self) -> "Catalog":

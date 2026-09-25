@@ -47,25 +47,44 @@ def _ensure_custom_factor_table(catalog) -> None:
 
 _ic_summary_table_ensured = False
 
+# DDL lives in sql/duckdb/factors.sql (loaded by Catalog.initialize()); the
+# ensure below is the belt-and-braces path for catalogs that were initialized
+# before that file existed. Resolution mirrors Catalog.initialize().
+_IC_SUMMARY_DDL_PATH = "sql/duckdb/factors.sql"
+
+
+def _load_ic_summary_ddl(catalog) -> str | None:
+    """Read the gold_factor_ic_summary DDL from sql/duckdb/factors.sql."""
+    from pathlib import Path
+
+    roots = []
+    repo_root = getattr(catalog, "repo_root", None)
+    if repo_root is not None:
+        roots.append(Path(repo_root))
+    roots.append(Path.cwd())
+    # Source checkout fallback: <repo>/python/cquant/api_server/routes/factors.py
+    roots.append(Path(__file__).resolve().parents[4])
+    for root in roots:
+        path = root / _IC_SUMMARY_DDL_PATH
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    return None
+
 
 def _ensure_ic_summary_table(catalog) -> None:
-    """幂等创建 IC 汇总表（进程内只执行一次）。"""
+    """幂等创建 IC 汇总表（进程内只执行一次）。DDL 来自 sql/duckdb/factors.sql。"""
     global _ic_summary_table_ensured
     if _ic_summary_table_ensured:
         return
     try:
-        catalog.execute("""
-            CREATE TABLE IF NOT EXISTS gold_factor_ic_summary (
-                factor_name VARCHAR PRIMARY KEY,
-                ic_mean DOUBLE,
-                icir DOUBLE,
-                ic_positive_pct DOUBLE,
-                n INTEGER,
-                window_start DATE,
-                window_end DATE,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
+        ddl = _load_ic_summary_ddl(catalog)
+        if ddl is None:
+            logger.debug("_ensure_ic_summary_table: %s not found", _IC_SUMMARY_DDL_PATH)
+            return
+        from cquant.datahub.catalog import _split_statements
+
+        for stmt in _split_statements(ddl):
+            catalog.execute(stmt)
         _ic_summary_table_ensured = True
     except Exception as exc:
         logger.debug("_ensure_ic_summary_table: %s", exc)

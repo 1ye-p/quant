@@ -3705,6 +3705,53 @@ def _invoke_report_writer(context_md: str, meta: dict) -> str:
     return content
 
 
+def _append_report_charts(catalog, content_md: str, meta: dict) -> str:
+    """Append ``[CHART:...]`` spec markers to the report markdown (backlog #6).
+
+    Wires ``ai_advisor.chart_generator`` into the report path: a metric-cards
+    block for the headline metrics and (when snapshots exist) a NAV line
+    chart. Markers ride inside ``content_md`` — the report tab renders them
+    verbatim as chart specs. Best-effort: any failure keeps the text report.
+    """
+    try:
+        from cquant.ai_advisor.chart_generator import ChartGenerator
+
+        gen = ChartGenerator()
+        m = meta.get("metrics") or {}
+
+        def pct(key: str) -> str:
+            v = m.get(key)
+            return "—" if v is None else f"{float(v) * 100:.2f}%"
+
+        cards = [
+            {"label": "总收益率", "value": pct("total_return")},
+            {"label": "年化收益", "value": pct("annualized_return")},
+            {"label": "Sharpe", "value": m.get("sharpe_ratio", "—")},
+            {"label": "最大回撤", "value": pct("max_drawdown")},
+            {"label": "胜率", "value": pct("win_rate")},
+            {"label": "年化波动率", "value": pct("annualized_volatility")},
+        ]
+        parts = [content_md, gen.metric_cards(cards, title="核心指标").to_marker()]
+
+        nav_df = catalog.query(
+            "SELECT trade_date, nav FROM gold_portfolio_snapshots "
+            "WHERE run_id = ? ORDER BY trade_date",
+            [meta.get("run_id")],
+        )
+        if not nav_df.is_empty():
+            nav_points = [
+                {"date": str(d), "nav": float(v)}
+                for d, v in zip(nav_df["trade_date"].to_list(), nav_df["nav"].to_list())
+            ]
+            parts.append(
+                gen.line(nav_points, y_keys=["nav"], title="组合净值曲线").to_marker()
+            )
+        return "\n\n".join(parts)
+    except Exception as exc:
+        logger.warning("report chart append failed for %s: %s", meta.get("run_id"), exc)
+        return content_md
+
+
 def _mirror_report_to_knowledge_base(kb, report_id: str, run_id: str, content_md: str) -> bool:
     """Persist the report markdown into the knowledge base (best-effort).
 
@@ -3761,6 +3808,7 @@ async def generate_research_report(
             _ensure_research_report_table(catalog)
             meta, ctx_md = _build_report_context(catalog, run_id)
             content_md = _invoke_report_writer(ctx_md, meta)
+            content_md = _append_report_charts(catalog, content_md, meta)
             report_id = str(uuid.uuid4())
             catalog.execute(
                 "INSERT INTO gold_research_reports (report_id, run_id, content_md, created_at) "

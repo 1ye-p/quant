@@ -948,7 +948,9 @@
         "export_csv": "导出 CSV"
       },
       "scatter_title": "交易时点",
-      "empty": "暂无成交记录"
+      "empty": "暂无成交记录",
+      "persist_failed_title": "成交记录持久化失败",
+      "persist_failed_hint": "本次回测的成交明细写入 gold_fills 失败，下方列表可能为空。回测指标本身不受影响，可重新运行或检查数据湖状态。"
     },
     "walkforward": {
       "empty": {

@@ -202,6 +202,47 @@ class TestFillsPersistence:
             for rec in caplog.records
         ), "failure must be logged at error level with run_id"
 
+    def test_mark_failure_preserves_non_dict_tags(self, catalog) -> None:
+        """Backlog #4：tags 为非 dict JSON（字符串/数组）时保留原值到 tags_legacy。"""
+        cat, _ = catalog
+        run_id = _run_backtest(cat, _synthetic_prices())
+        # Simulate a legacy non-dict tags value (older writers stored a bare
+        # JSON array / string).
+        cat.execute(
+            "UPDATE gold_backtest_runs SET tags = ? WHERE run_id = ?",
+            ['["legacy", "tags"]', run_id],
+        )
+        runner = BacktestRunner(cat)
+        runner._mark_fills_persist_failure(run_id, RuntimeError("boom"))
+
+        raw = cat.query(
+            "SELECT tags FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+        )["tags"][0]
+        tags = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        assert tags["fills_persisted"] is False
+        assert "boom" in tags["fills_error"]
+        assert tags["tags_legacy"] == '["legacy", "tags"]', (
+            "original non-dict tags value must be preserved, not dropped"
+        )
+
+    def test_mark_failure_keeps_dict_tags_merge(self, filled_run) -> None:
+        """正常 dict tags：合并写入，不产生 tags_legacy。"""
+        cat, run_id = filled_run
+        cat.execute(
+            "UPDATE gold_backtest_runs SET tags = ? WHERE run_id = ?",
+            ['{"top_n": 3}', run_id],
+        )
+        BacktestRunner(cat)._mark_fills_persist_failure(
+            run_id, ValueError("nope")
+        )
+        raw = cat.query(
+            "SELECT tags FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+        )["tags"][0]
+        tags = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        assert tags["top_n"] == 3
+        assert tags["fills_persisted"] is False
+        assert "tags_legacy" not in tags
+
 
 # ── T3: tca / stress-test 端点 ────────────────────────────────────────────────
 

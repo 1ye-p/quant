@@ -8,6 +8,19 @@ import { TradeScatter, type TradePoint } from '@/components/charts/TradeScatter'
 import { TradeKlineChart } from '@/components/backtests/TradeKlineChart'
 import { queryKeys } from '@/lib/queryKeys'
 
+/** Parse run tags (JSON string or already-parsed object) into a record. */
+function parseRunTags(raw: unknown): Record<string, unknown> {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw as Record<string, unknown>
+  if (typeof raw !== 'string') return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
 export function BacktestFillsTab() {
   const { id: selectedId } = useParams<{ id: string }>()
   const [view, setView] = useState<'table' | 'scatter' | 'kline'>('table')
@@ -22,6 +35,17 @@ export function BacktestFillsTab() {
     staleTime: 60_000,
     placeholderData: keepPreviousData,
   })
+
+  // Run detail (tags) — surfaces fills-persistence failure instead of a blank page.
+  const { data: runDetail } = useQuery({
+    queryKey: queryKeys.backtests.detail(selectedId!),
+    queryFn: () => backtestsApi.get(selectedId!),
+    enabled: !!selectedId,
+    staleTime: 60_000,
+  })
+  const runTags = useMemo(() => parseRunTags(runDetail?.tags), [runDetail?.tags])
+  const fillsPersistFailed = runTags.fills_persisted === false
+  const fillsError = typeof runTags.fills_error === 'string' ? runTags.fills_error : ''
 
   // Transform fills data for TradeScatter chart
   const tradePoints = useMemo((): TradePoint[] => {
@@ -88,6 +112,25 @@ export function BacktestFillsTab() {
 
   return (
     <div className="space-y-3">
+      {/* Fills persistence failure banner (run tag fills_persisted=false) */}
+      {fillsPersistFailed && (
+        <div className="card p-4 border border-red-200 bg-red-50" data-testid="fills-persist-failure">
+          <div className="flex items-start gap-2">
+            <span className="text-red-600 font-semibold text-sm">
+              {t('component.fills.persist_failed_title')}
+            </span>
+          </div>
+          <p className="text-xs text-red-700 mt-1">
+            {t('component.fills.persist_failed_hint')}
+          </p>
+          {fillsError && (
+            <p className="text-xs text-red-600 mt-2 font-mono break-all" data-testid="fills-persist-error">
+              {fillsError}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* View Tabs */}
       <div className="flex gap-2">
         <button

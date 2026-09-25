@@ -948,7 +948,9 @@
         "export_csv": "Export CSV"
       },
       "scatter_title": "Trade Timing",
-      "empty": "No trade records"
+      "empty": "No trade records",
+      "persist_failed_title": "Fills persistence failed",
+      "persist_failed_hint": "Writing this run's fills to gold_fills failed; the list below may be empty. Backtest metrics are unaffected — re-run the backtest or check the data lake."
     },
     "walkforward": {
       "empty": {

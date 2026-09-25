@@ -1468,21 +1468,37 @@ class BacktestRunner:
             self._mark_fills_persist_failure(run_id, exc)
 
     def _mark_fills_persist_failure(self, run_id: str, exc: Exception) -> None:
-        """Stamp ``fills_persisted=false`` + error summary into the run's tags."""
+        """Stamp ``fills_persisted=false`` + error summary into the run's tags.
+
+        Defensive on legacy tags values: if the existing tags column holds
+        non-dict JSON (a bare string/array — e.g. written by an older
+        version), the original value is preserved under ``tags_legacy``
+        rather than silently discarded before the new dict is written.
+        """
         try:
             tags_row = self._catalog.query(
                 "SELECT tags FROM gold_backtest_runs WHERE run_id = ?", [run_id]
             )
             tags: dict = {}
+            legacy_value: str | None = None
             if not tags_row.is_empty():
                 raw = tags_row["tags"][0]
                 if raw:
-                    try:
-                        parsed = json.loads(raw)
-                        if isinstance(parsed, dict):
-                            tags = parsed
-                    except (TypeError, ValueError):
-                        tags = {}
+                    if isinstance(raw, dict):
+                        tags = dict(raw)
+                    else:
+                        try:
+                            parsed = json.loads(raw) if isinstance(raw, str) else raw
+                            if isinstance(parsed, dict):
+                                tags = parsed
+                            else:
+                                # Valid JSON but not an object (string, list,
+                                # number, ...) — keep it instead of dropping.
+                                legacy_value = raw if isinstance(raw, str) else json.dumps(parsed)
+                        except (TypeError, ValueError):
+                            legacy_value = str(raw)
+            if legacy_value is not None:
+                tags["tags_legacy"] = legacy_value
             tags["fills_persisted"] = False
             tags["fills_error"] = f"{type(exc).__name__}: {exc}"[:500]
             self._catalog.execute(

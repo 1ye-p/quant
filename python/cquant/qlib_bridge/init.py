@@ -66,13 +66,16 @@ def init_qlib_with_quantdb(
         from cquant.qlib_bridge import init_qlib_with_quantdb
 
         # QuantDB source (default). The catalog must stay open while Qlib
-        # reads from it — close it only when the Qlib session is done, so the
-        # DuckDB WAL gets checkpointed (Catalog.close()).
+        # reads from it — close it only when the Qlib session is done.
+        # Catalog.close() stops the checkpoint thread and closes the DuckDB
+        # connection (which flushes the WAL); if a CHECKPOINT is still in
+        # flight after the join timeout, close() deliberately leaves the
+        # connection open and logs an ERROR instead of aborting it.
         catalog = Catalog("data/catalog.duckdb")
         catalog.initialize()
         init_qlib_with_quantdb(catalog)
         # ... run Qlib workflows ...
-        catalog.close()  # checkpoint WAL on session end
+        catalog.close()  # graceful shutdown; WAL checkpointed on clean close
 
         # Tushare source
         init_qlib_with_quantdb(data_source="tushare", tushare_token="your_token")

@@ -156,3 +156,38 @@ CREATE TABLE IF NOT EXISTS silver_external_indicators (
 
 CREATE INDEX IF NOT EXISTS idx_ext_ind_date
     ON silver_external_indicators (indicator_key, trade_date);
+
+CREATE TABLE IF NOT EXISTS silver_external_indicator_catalog (
+    indicator_key        VARCHAR PRIMARY KEY,
+    display_name         VARCHAR NOT NULL,
+    unit                 VARCHAR,
+    description          VARCHAR,
+    source_type          VARCHAR NOT NULL,      -- 'builtin' | 'custom_http' | 'csv'
+    source_name          VARCHAR NOT NULL,
+    pinned_source        VARCHAR,
+    source_config        JSON,
+    available_date_rule  VARCHAR NOT NULL DEFAULT 'B',
+    frequency            VARCHAR NOT NULL DEFAULT 'daily',
+    backfill_start       DATE,
+    enabled              BOOLEAN NOT NULL DEFAULT TRUE,
+    last_refresh_at      TIMESTAMPTZ,
+    last_status          VARCHAR,
+    last_error           TEXT,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE SEQUENCE IF NOT EXISTS ext_ind_run_seq;
+CREATE TABLE IF NOT EXISTS silver_external_indicator_refresh_log (
+    run_id         BIGINT PRIMARY KEY DEFAULT nextval('ext_ind_run_seq'),
+    indicator_key  VARCHAR NOT NULL,
+    source_name    VARCHAR NOT NULL,
+    started_at     TIMESTAMPTZ NOT NULL,
+    finished_at    TIMESTAMPTZ,
+    status         VARCHAR NOT NULL,
+    trigger        VARCHAR NOT NULL,
+    range_start    DATE,
+    range_end      DATE,
+    rows_fetched   INTEGER,
+    rows_upserted  INTEGER,
+    error          TEXT
+);

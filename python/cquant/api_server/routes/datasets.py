@@ -714,8 +714,10 @@ class CatalogPatchBody(BaseModel):
 
     P1 白名单：display_name / unit / description / frequency / enabled /
     available_date_rule / backfill_start。
-    ``pinned_source`` / ``source_config`` 是 P2/P3 保留字段——出现在请求中
-    直接 400（而非静默忽略），避免调用方误以为已生效。
+    P3-4 起 ``source_config``（dict，CustomHTTPConfig 字段）仅对
+    ``source_type='custom_http'`` 行开放，提供时走同一套
+    model_validate + 防护预检（坏配置 400 带 stage）。
+    ``pinned_source`` 仍为保留字段——出现在请求中直接 400（而非静默忽略）。
     """
 
     display_name: str | None = None
@@ -725,9 +727,11 @@ class CatalogPatchBody(BaseModel):
     enabled: bool | None = None
     available_date_rule: str | None = None
     backfill_start: str | None = None
-    # P2/P3 保留字段：仅为了能给出明确的 400 提示，不会被写入
+    # P3-4：custom_http 行专用（见上方说明）；csv/builtin 行提供 → 400。
+    # 接受 str 以便对非对象 payload 也走行类型检查给 400（而非 pydantic 422）
+    source_config: dict | str | None = None
+    # 保留字段：仅为了能给出明确的 400 提示，不会被写入
     pinned_source: str | None = None
-    source_config: str | None = None
 
 
 _IND_KEY_RE = _re.compile(r"^[a-z_0-9]+$")
@@ -748,8 +752,10 @@ def _validate_indicator_key(indicator_key: str) -> None:
 
 @router.get("/external-indicators/catalog")
 async def list_external_indicator_catalog(catalog: CatalogDep) -> dict:
-    """外部指标目录列表（live 新鲜度：latest_trade_date / stale 实时计算）。"""
-    items = list_catalog(catalog)
+    """外部指标目录列表（live 新鲜度：latest_trade_date / stale 实时计算）。
+
+    custom_http 行的 source_config 回显一律过 ``redact_config``（脱敏）。"""
+    items = [_redact_source_config(item) for item in list_catalog(catalog)]
     return {"items": items, "total": len(items)}
 
 
@@ -764,7 +770,7 @@ async def get_external_indicator_catalog_entry(
         raise HTTPException(
             status_code=404, detail=f"indicator_key 不存在：'{indicator_key}'"
         )
-    return entry
+    return _redact_source_config(entry)
 
 
 @router.patch("/external-indicators/catalog/{indicator_key}")
@@ -794,19 +800,40 @@ async def patch_external_indicator_catalog_entry(
                 f"允许 {sorted(_RULE_ALLOWED)}"
             ),
         )
-    reserved = [f for f in ("pinned_source", "source_config") if getattr(body, f) is not None]
-    if reserved:
+    if body.pinned_source is not None:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"字段 {reserved} 为 P2/P3 保留字段，P1 不支持通过 PATCH 修改；"
+                "字段 ['pinned_source'] 为保留字段，不支持通过 PATCH 修改；"
                 "请从请求中移除"
             ),
         )
-    if get_catalog_entry(catalog, indicator_key) is None:
+    entry = get_catalog_entry(catalog, indicator_key)
+    if entry is None:
         raise HTTPException(
             status_code=404, detail=f"indicator_key 不存在：'{indicator_key}'"
         )
+    source_config_json: str | None = None
+    if body.source_config is not None:
+        if entry.get("source_type") != "custom_http":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "source_config 仅支持 source_type='custom_http' 的行"
+                    f"（当前 source_type={entry.get('source_type')!r}）"
+                ),
+            )
+        if not isinstance(body.source_config, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "stage": "config_invalid",
+                    "message": "source_config 必须是对象（CustomHTTPConfig 字段）",
+                },
+            )
+        source_config_json = _precheck_custom_http_config(
+            body.source_config
+        ).model_dump_json()
     upsert_catalog_entry(
         catalog,
         CatalogEntryInput(
@@ -818,6 +845,7 @@ async def patch_external_indicator_catalog_entry(
             enabled=body.enabled,
             available_date_rule=body.available_date_rule,
             backfill_start=body.backfill_start,
+            source_config=source_config_json,
         ),
     )
     return get_catalog_entry(catalog, indicator_key)
@@ -843,6 +871,213 @@ async def delete_external_indicator_catalog_entry(
             if purge_data
             else "目录行已删除；数据行保留（如需清除请传 purge_data=true）"
         ),
+    }
+
+
+# ── custom_http 创建 + 连接测试（P3-4）──────────────────────────────────────
+
+from datetime import date as _hc_date  # noqa: E402
+
+from pydantic import ValidationError as _ValidationError  # noqa: E402
+
+from cquant.datahub.pipelines.indicator_sources.http_config import (  # noqa: E402
+    CustomHTTPConfig,
+    redact_config as _redact_config,
+)
+from cquant.datahub.pipelines.indicator_sources.http_guard import (  # noqa: E402
+    GuardError as _GuardError,
+    guarded_fetch as _guarded_fetch,
+    validate_url as _validate_url,
+)
+
+
+def _render_sample_url(cfg: CustomHTTPConfig, anchor: _hc_date) -> str:
+    """渲染 {date} 后的样例 URL（date_param_style='none' 时原样返回）。"""
+    if cfg.date_param_style == "none":
+        return cfg.url_template
+    rendered = (
+        anchor.strftime("%Y%m%d")
+        if cfg.date_param_style == "yyyymmdd"
+        else anchor.isoformat()
+    )
+    return cfg.url_template.replace("{date}", rendered)
+
+
+def _precheck_custom_http_config(raw: dict) -> CustomHTTPConfig:
+    """保存前防护预检（设计 §13）：model_validate（含 jsonpath 预解析）+
+    ``validate_url``（渲染 {date} 后的 URL）。失败统一 400 带 stage 标签。"""
+    try:
+        cfg = CustomHTTPConfig.model_validate(raw)
+    except _ValidationError as exc:
+        compact = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "stage": "config_invalid",
+                "message": f"source_config 校验失败：{compact}",
+            },
+        ) from exc
+    try:
+        _validate_url(
+            _render_sample_url(cfg, _hc_date.today()),
+            allow_insecure=cfg.allow_insecure_http,
+        )
+    except _GuardError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "stage": exc.stage,
+                "message": f"保存前防护预检失败：{exc}",
+            },
+        ) from exc
+    return cfg
+
+
+def _redact_source_config(entry: dict) -> dict:
+    """custom_http 行的 source_config 回显脱敏（存原文，脱敏只在回显）。
+
+    非 custom_http 行 / 空 source_config 原样返回（csv 行的 config 无敏感语义，
+    解析为对象回显以便前端统一处理）。"""
+    raw = entry.get("source_config")
+    if not raw:
+        return entry
+    if entry.get("source_type") == "custom_http":
+        try:
+            cfg = CustomHTTPConfig.model_validate(
+                json.loads(raw) if isinstance(raw, str) else raw
+            )
+        except Exception:
+            entry["source_config"] = {"error": "unparseable_source_config"}
+            return entry
+        entry["source_config"] = _redact_config(cfg)
+    elif isinstance(raw, str):
+        try:
+            entry["source_config"] = json.loads(raw)
+        except ValueError:
+            pass
+    return entry
+
+
+class CatalogCreateBody(BaseModel):
+    """POST /external-indicators/catalog（custom_http 创建）请求体。
+
+    source_config 为完整 CustomHTTPConfig 字段（dict），保存前过
+    ``_precheck_custom_http_config``。``pinned_source`` 为保留字段 → 400。
+    """
+
+    indicator_key: str
+    display_name: str | None = None
+    unit: str | None = None
+    description: str | None = None
+    frequency: str = "daily"
+    available_date_rule: str = "B"
+    backfill_start: str | None = None
+    source_name: str | None = None
+    source_config: dict
+    # 保留字段：仅为了能给出明确的 400 提示，不会被写入
+    pinned_source: str | None = None
+
+
+def _anchor_date_or_today(catalog):
+    """锚定日：silver_prices_1d max(trade_date)，缺省 today。"""
+    a = catalog.query("SELECT max(trade_date) AS a FROM silver_prices_1d").item(0, "a")
+    if isinstance(a, str):
+        a = _hc_date.fromisoformat(str(a)[:10])
+    return a or _hc_date.today()
+
+
+@router.post("/external-indicators/catalog", status_code=201)
+def create_external_indicator_catalog_entry(
+    catalog: CatalogDep, body: CatalogCreateBody
+) -> dict:
+    """创建 custom_http 目录行（保存前防护预检：坏 URL/配置在保存时暴露，
+    不等首次刷新）。已存在 key → 409（创建语义，修改走 PATCH）。"""
+    _validate_indicator_key(body.indicator_key)
+    if body.pinned_source is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "字段 ['pinned_source'] 为保留字段，custom_http 创建不支持；"
+                "请从请求中移除"
+            ),
+        )
+    if body.frequency not in _FREQ_ALLOWED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"frequency 非法：'{body.frequency}'，允许 {sorted(_FREQ_ALLOWED)}",
+        )
+    if body.available_date_rule not in _RULE_ALLOWED:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"available_date_rule 非法：'{body.available_date_rule}'，"
+                f"允许 {sorted(_RULE_ALLOWED)}"
+            ),
+        )
+    if get_catalog_entry(catalog, body.indicator_key) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"indicator_key 已存在：'{body.indicator_key}'"
+                "（创建语义；修改请走 PATCH）"
+            ),
+        )
+    cfg = _precheck_custom_http_config(body.source_config)
+    upsert_catalog_entry(
+        catalog,
+        CatalogEntryInput(
+            indicator_key=body.indicator_key,
+            display_name=body.display_name,
+            unit=body.unit,
+            description=body.description,
+            source_type="custom_http",
+            source_name=body.source_name or "custom_http",
+            source_config=cfg.model_dump_json(),  # 存原文，脱敏只在回显
+            available_date_rule=body.available_date_rule,
+            frequency=body.frequency,
+            backfill_start=body.backfill_start,
+            enabled=True,
+        ),
+    )
+    return _redact_source_config(get_catalog_entry(catalog, body.indicator_key))
+
+
+class CustomHTTPTestBody(BaseModel):
+    """POST /external-indicators/test 请求体（完整 config，不入库）。"""
+
+    source_config: dict
+
+
+@router.post("/external-indicators/test")
+def test_custom_http_source(catalog: CatalogDep, body: CustomHTTPTestBody) -> dict:
+    """连接测试（配置调试闭环）：``guarded_fetch`` 单次拉取（date_param_style≠none
+    时 dates=[锚定日]，none 时 []），**不写任何库表**。
+
+    成功 → ``{sample: [{trade_date, value}] ≤10 行, diagnostics}``；
+    GuardError → 400 带 stage 标签与环节信息（前端文案映射依赖 stage，
+    直接读 GuardError 本体属性，不从 catalog last_error 字符串解析）。"""
+    cfg = _precheck_custom_http_config(body.source_config)
+    anchor = _anchor_date_or_today(catalog)
+    dates: list[_hc_date] = (
+        [] if cfg.date_param_style == "none" else [anchor]
+    )
+    try:
+        rows = _guarded_fetch(cfg, dates)
+    except _GuardError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"stage": exc.stage, "message": str(exc)},
+        ) from exc
+    return {
+        "sample": rows[:10],
+        "diagnostics": {
+            "resolved_url": _render_sample_url(cfg, anchor),
+            "status": "ok",
+            "rows_parsed": len(rows),
+            "field_map_hit": bool(rows),
+        },
     }
 
 

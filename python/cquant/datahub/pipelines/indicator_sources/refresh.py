@@ -12,12 +12,14 @@ adapter.fetch → import_frame → refresh_log + 目录状态写回。
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
+from pydantic import ValidationError
 
 from cquant.datahub.catalog import Catalog
 from cquant.datahub.pipelines.external_indicator_importer import (
@@ -35,6 +37,11 @@ from cquant.datahub.pipelines.indicator_sources.builtin_registry import (
     BUILTIN_BY_KEY,
     source_ready,
 )
+from cquant.datahub.pipelines.indicator_sources.http_adapter import (
+    HTTPIndicatorAdapter,
+)
+from cquant.datahub.pipelines.indicator_sources.http_config import CustomHTTPConfig
+from cquant.datahub.pipelines.indicator_sources.http_guard import GuardError
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +164,34 @@ class _RefreshImporter(ExternalIndicatorImporter):
 _FRAME_COLUMN_MAP = {"trade_date": "trade_date", "value": "value"}
 
 
+def _custom_http_adapter(entry: dict) -> HTTPIndicatorAdapter:
+    """custom_http 目录行 → HTTPIndicatorAdapter（不走 candidates 解析）。
+
+    source_config 缺失/JSON 损坏/校验失败一律抛 :class:`IndicatorFetchError`
+    （``config_invalid`` 语义）——被逐指标 try 接住落 error，不阻断其余。
+    """
+    raw = entry.get("source_config")
+    if raw is None or raw == "":
+        raise IndicatorFetchError(
+            f"config_invalid: custom_http row {entry['indicator_key']!r} has no "
+            "source_config"
+        )
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            raise IndicatorFetchError(
+                f"config_invalid: source_config is not valid JSON: {exc}"
+            ) from exc
+    try:
+        cfg = CustomHTTPConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise IndicatorFetchError(f"config_invalid: {exc}") from exc
+    return HTTPIndicatorAdapter(
+        f"custom_http:{entry.get('source_name') or entry['indicator_key']}", cfg
+    )
+
+
 def run_external_indicator_refresh(
     catalog: Catalog,
     keys: list[str] | None = None,
@@ -184,9 +219,9 @@ def run_external_indicator_refresh(
     rows_by_key = {
         r["indicator_key"]: r
         for r in catalog.query(
-            "SELECT indicator_key, display_name, source_type, pinned_source, "
-            "available_date_rule, frequency, backfill_start, enabled, "
-            "last_refresh_at, last_status "
+            "SELECT indicator_key, display_name, source_type, source_name, "
+            "pinned_source, available_date_rule, frequency, backfill_start, "
+            "enabled, last_refresh_at, last_status, source_config "
             "FROM silver_external_indicator_catalog"
         ).rows(named=True)
     }
@@ -212,11 +247,11 @@ def run_external_indicator_refresh(
                 IndicatorRefreshResult(key, status="error", error="not in catalog")
             )
             continue
-        if entry.get("source_type") != "builtin":
-            # P2 只刷 builtin；csv/custom_http（含 L2 custom_http，P3）跳过
+        if entry.get("source_type") not in ("builtin", "custom_http"):
+            # csv 行不参与统一刷新（用户自管导入）
             summary.results.append(
                 IndicatorRefreshResult(
-                    key, status="skipped", error="non-builtin source_type"
+                    key, status="skipped", error="non-refreshable source_type"
                 )
             )
             continue
@@ -229,7 +264,11 @@ def run_external_indicator_refresh(
                     "anchor unavailable: silver_prices_1d is empty — refusing "
                     "to guess a refresh window"
                 )
-            adapter = resolve_source(entry, adapters)
+            adapter = (
+                resolve_source(entry, adapters)
+                if entry.get("source_type") == "builtin"
+                else _custom_http_adapter(entry)
+            )
             result.source = adapter.name
             start, end = _window(catalog, entry, anchor, backfill)
             result.range_start, result.range_end = start, end
@@ -257,6 +296,10 @@ def run_external_indicator_refresh(
             mark_refresh_result(
                 catalog, key, status="ok", source_name=adapter.name
             )
+        except GuardError as exc:
+            # stage 标签保留在错误串里（API 层按 stage 映射用户提示）
+            result.status, result.error = "error", f"GuardError[{exc.stage}]: {exc}"
+            _finish_error(catalog, run_id, key, result, exc)
         except IndicatorFetchError as exc:
             result.status, result.error = "error", str(exc)
             _finish_error(catalog, run_id, key, result, exc)
@@ -299,7 +342,7 @@ def _window(
     """增量 = max(trade_date)−(OVERLAP_DAYS−1) .. anchor（5 日含端点重叠）；
     无数据或 backfill=True → backfill_start（缺省锚定日−default_backfill_years）
     .. anchor。"""
-    reg = BUILTIN_BY_KEY[entry["indicator_key"]]
+    reg = BUILTIN_BY_KEY.get(entry["indicator_key"])  # custom_http 行不在 registry
     max_td = catalog.query(
         "SELECT max(trade_date) AS m FROM silver_external_indicators "
         "WHERE indicator_key = ?",
@@ -312,12 +355,11 @@ def _window(
 
     bf_start = entry.get("backfill_start")
     if bf_start is None:
+        years = reg.default_backfill_years if reg is not None else 2
         try:
-            bf_start = anchor.replace(year=anchor.year - reg.default_backfill_years)
+            bf_start = anchor.replace(year=anchor.year - years)
         except ValueError:  # 02-29 → 02-28
-            bf_start = anchor.replace(
-                year=anchor.year - reg.default_backfill_years, day=28
-            )
+            bf_start = anchor.replace(year=anchor.year - years, day=28)
     if isinstance(bf_start, str):
         bf_start = date.fromisoformat(bf_start[:10])
     return bf_start, anchor

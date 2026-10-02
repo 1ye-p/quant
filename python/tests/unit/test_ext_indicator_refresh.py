@@ -325,12 +325,13 @@ class TestRunRefresh:
         ).row(0, named=True)
         assert cat_row["source_name"] == "akshare" and cat_row["last_status"] == "ok"
 
-    def test_non_builtin_rows_skipped(self, catalog):
+    def test_non_refreshable_rows_skipped(self, catalog):
+        """csv 行不参与统一刷新；custom_http 自 P3-3 起走刷新分支（见
+        test_http_adapter.py），不再 skipped。"""
         _seed_anchor(catalog)
         _seed_catalog_row(catalog, "k_csv", source_type="csv")
-        _seed_catalog_row(catalog, "k_http", source_type="custom_http")
         summary = run_external_indicator_refresh(
-            catalog, keys=["k_csv", "k_http"],
+            catalog, keys=["k_csv"],
             adapters={"akshare": FakeAdapter("akshare")}, inter_source_delay=0,
         )
         assert all(r.status == "skipped" for r in summary.results)

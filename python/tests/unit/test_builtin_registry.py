@@ -133,6 +133,17 @@ def client(catalog, monkeypatch):
     monkeypatch.delenv("CQUANT_API_KEY", raising=False)
     _patch_settings_token(monkeypatch, "")
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    # T3 交付后 enable 会真调 refresh —— 默认注入 fake 模块，零真网
+    # （个别用例可用 monkeypatch.setitem 覆盖为自己的 fake）
+    fake_mod = types.ModuleType(
+        "cquant.datahub.pipelines.indicator_sources.refresh"
+    )
+    fake_mod.run_external_indicator_refresh = (
+        lambda cat, keys, backfill, trigger: {"ok": True, "refreshed": list(keys)}
+    )
+    monkeypatch.setitem(
+        sys.modules, "cquant.datahub.pipelines.indicator_sources.refresh", fake_mod
+    )
     app.dependency_overrides[deps.get_catalog] = lambda: catalog
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
@@ -192,12 +203,13 @@ class TestGetBuiltins:
 
 class TestEnableBuiltin:
     def test_enable_writes_catalog_row(self, client, catalog):
+        # client fixture 已注入 fake refresh 模块（T3 后零真网）
         _seed_anchor(catalog, "2025-06-06")
         resp = client.post(f"{_BASE}/builtins/market_pe_all/enable")
         assert resp.status_code == 200
         body = resp.json()
         assert body["indicator_key"] == "market_pe_all"
-        assert body["backfill"] == "pending"  # T3 未交付 → ImportError 分支
+        assert body["backfill"] == {"ok": True, "refreshed": ["market_pe_all"]}
         row = catalog.query(
             "SELECT source_type, source_name, pinned_source, frequency, "
             "available_date_rule, enabled, backfill_start, display_name "

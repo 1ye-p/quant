@@ -89,6 +89,21 @@ async def _lifespan(app: FastAPI):
     from cquant.api_server.data_scheduler import start_data_scheduler
     from cquant.api_server.deps import get_catalog
     app.state.data_scheduler = start_data_scheduler(get_catalog())
+    # External indicator catalog migration (P1-4): one-shot idempotent
+    # backfill of catalog rows from existing silver_external_indicators data.
+    # Never block app startup on migration failure.
+    try:
+        from cquant.datahub.pipelines.indicator_catalog import (
+            backfill_catalog_from_data,
+        )
+
+        inserted = backfill_catalog_from_data(get_catalog())
+        if inserted:
+            logger.info(
+                "External indicator catalog migration inserted %d row(s)", inserted
+            )
+    except Exception as exc:
+        logger.warning("External indicator catalog backfill skipped: %s", exc)
     # 每小时告警检查
     scheduler = app.state.data_scheduler
     if scheduler is not None:

@@ -316,7 +316,8 @@ class TestGuardedFetchRedirects:
             guarded_fetch(_cfg(), _dates(1), _transport=httpx.MockTransport(handler))
         assert ei.value.stage == "redirect_blocked"
 
-    def test_cross_host_redirect_strips_credential_headers(self):
+    def test_cross_host_redirect_strips_credential_headers(self, monkeypatch):
+        monkeypatch.setenv("TEST_TOKEN", "tok-cross")
         requests_by_host: dict[str, httpx.Request] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -344,7 +345,8 @@ class TestGuardedFetchRedirects:
         assert "x-api-key" not in second.headers
         assert second.headers.get("x-custom") == "keep-me"
 
-    def test_same_host_redirect_keeps_credential_headers(self):
+    def test_same_host_redirect_keeps_credential_headers(self, monkeypatch):
+        monkeypatch.setenv("TEST_TOKEN", "tok-same")
         requests_by_path: dict[str, httpx.Request] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -481,3 +483,67 @@ class TestGuardedFetchLimits:
         with pytest.raises(GuardError) as ei:
             guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
         assert ei.value.stage == "ssrf_blocked"
+
+
+# ---------------------------------------------------------------------------
+# ${VAR} environment-variable rendering (design §6.1)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvVarRendering:
+    def test_env_ref_rendered_in_headers_and_params(self, monkeypatch):
+        monkeypatch.setenv("MY_TOKEN", "real-secret-token")
+        monkeypatch.setenv("MY_REGION", "cn")
+
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return _json_response([{"date": "20260101", "close": 1}])
+
+        cfg = _cfg(
+            headers={"Authorization": "Bearer ${MY_TOKEN}"},
+            params={"date": "{date}", "region": "${MY_REGION}"},
+        )
+        rows = guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        assert rows[0]["value"] == 1
+        req = captured[0]
+        assert req.headers["authorization"] == "Bearer real-secret-token"
+        assert req.url.params["region"] == "cn"
+
+    def test_missing_env_var_raises_env_missing_with_var_name(self, monkeypatch):
+        monkeypatch.delenv("MISSING_TOKEN", raising=False)
+
+        def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+            raise AssertionError("request must not be sent")
+
+        cfg = _cfg(headers={"X-Api-Key": "${MISSING_TOKEN}"})
+        with pytest.raises(GuardError) as ei:
+            guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        assert ei.value.stage == "env_missing"
+        assert "MISSING_TOKEN" in str(ei.value)
+        assert "${" not in str(ei.value)
+
+    def test_plain_values_passthrough_unchanged(self, monkeypatch):
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return _json_response([{"date": "20260101", "close": 3}])
+
+        cfg = _cfg(headers={"X-Custom": "plain-value"}, params={})
+        rows = guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        assert rows[0]["value"] == 3
+        assert captured[0].headers["x-custom"] == "plain-value"
+
+    def test_cfg_object_not_mutated_by_rendering(self, monkeypatch):
+        monkeypatch.setenv("MY_TOKEN", "real-secret-token")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _json_response([{"date": "20260101", "close": 1}])
+
+        cfg = _cfg(headers={"Authorization": "Bearer ${MY_TOKEN}"})
+        guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        # cfg keeps the verbatim ${VAR} reference → redact_config semantics
+        # (which pass ${...} through unchanged) are unaffected.
+        assert cfg.headers["Authorization"] == "Bearer ${MY_TOKEN}"

@@ -848,7 +848,8 @@ async def patch_external_indicator_catalog_entry(
             source_config=source_config_json,
         ),
     )
-    return get_catalog_entry(catalog, indicator_key)
+    # 与 create/GET 一致：回显前脱敏 source_config（含 token 等敏感值）
+    return _redact_source_config(get_catalog_entry(catalog, indicator_key))
 
 
 @router.delete("/external-indicators/catalog/{indicator_key}")

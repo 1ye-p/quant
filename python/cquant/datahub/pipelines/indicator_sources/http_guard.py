@@ -31,6 +31,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
+import re
 import socket
 from datetime import date
 from typing import Sequence
@@ -63,7 +65,13 @@ _STAGES = (
     "too_many_requests",
     "http_error",
     "request_failed",
+    "env_missing",
 )
+
+# ${VAR_NAME} environment-variable references in header/param values (design
+# §6.1): stored verbatim in the catalog, rendered to real values only here at
+# request-build time. Rendered values must never reach logs or error messages.
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class GuardError(Exception):
@@ -190,6 +198,34 @@ def _extract_records(body: object, spec: ExtractionSpec) -> list[dict]:
     return rows
 
 
+def _render_env_value(value: str) -> str:
+    """Render ``${VAR_NAME}`` references in one header/param value to the
+    environment variable's value. Missing variable → ``env_missing`` GuardError
+    naming the variable (never any resolved value)."""
+
+    def _sub(match: re.Match[str]) -> str:
+        name = match.group(1)
+        resolved = os.environ.get(name)
+        if resolved is None:
+            raise GuardError(
+                "env_missing",
+                f"environment variable {name!r} referenced in headers/params "
+                "is not set; set the variable or replace the reference with "
+                "a real value",
+            )
+        return resolved
+
+    return _ENV_VAR_RE.sub(_sub, value)
+
+
+def _render_env_map(mapping: dict[str, str]) -> dict[str, str]:
+    """Render env references in the *values* of a headers/params dict.
+
+    Returns a new dict; the input (typically ``cfg.headers``) is never
+    mutated, so redaction semantics on the stored config are unaffected."""
+    return {k: _render_env_value(v) for k, v in mapping.items()}
+
+
 def _fetch_and_read(
     client: httpx.Client, cfg: CustomHTTPConfig, url: str, params: dict[str, str] | None
 ) -> object:
@@ -217,13 +253,18 @@ def _fetch_and_read(
                 netloc,
             )
         else:
-            headers = cfg.headers
+            headers = dict(cfg.headers)
+
+        # ${VAR} → real values at request-build time only (new dicts; cfg
+        # itself keeps the verbatim references).
+        headers = _render_env_map(headers)
+        params = _render_env_map(current_params) if current_params else current_params
 
         request = client.build_request(
             cfg.method,
             current_url,
             headers=headers,
-            params=current_params,
+            params=params,
         )
         try:
             response = client.send(request, stream=True)

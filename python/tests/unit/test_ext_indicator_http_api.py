@@ -298,6 +298,30 @@ class TestPatchSourceConfig:
         assert resp.status_code == 400
         assert "source_config" in resp.json()["detail"]
 
+    def test_patch_response_source_config_redacted(self, client, catalog, monkeypatch):
+        """PATCH 成功回显必须脱敏：密文 token → ***redacted***，${VAR} 原样。"""
+        monkeypatch.setattr(socket, "getaddrinfo", _dns(_PUBLIC_IP))
+        _seed_custom_http(catalog)
+        new_cfg = _config(
+            headers={
+                "Authorization": "Bearer sk-testsecret123456",
+                "X-Api-Key": "${MY_TOKEN}",
+            }
+        )
+        resp = client.patch(
+            f"{_BASE}/catalog/my_http_indicator", json={"source_config": new_cfg}
+        )
+        assert resp.status_code == 200, resp.text
+        sc = resp.json()["source_config"]
+        # 明文 secret 形态 → ***redacted***
+        assert sc["headers"]["Authorization"] == "***redacted***"
+        # ${VAR} 引用原样回显（不含真实值）
+        assert sc["headers"]["X-Api-Key"] == "${MY_TOKEN}"
+        assert "sk-testsecret123456" not in resp.text
+        # DB 存原文（脱敏只在回显）——与 create 行为一致
+        stored = json.loads(_catalog_row(catalog, "my_http_indicator")["source_config"])
+        assert stored["headers"]["Authorization"] == "Bearer sk-testsecret123456"
+
     def test_patch_builtin_row_rejected_400(self, client, catalog):
         catalog.execute(
             "INSERT INTO silver_external_indicator_catalog "

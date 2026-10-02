@@ -999,7 +999,7 @@ async def list_builtin_indicators(catalog: CatalogDep) -> dict:
 
 
 @router.post("/external-indicators/builtins/{indicator_key}/enable")
-async def enable_builtin_indicator(
+def enable_builtin_indicator(
     catalog: CatalogDep, indicator_key: str, body: BuiltinEnableBody | None = None
 ) -> dict:
     """启用内置指标：写目录行（source_type='builtin'）+ 同步触发回填。
@@ -1035,3 +1035,91 @@ async def enable_builtin_indicator(
     backfill = _run_builtin_backfill(catalog, indicator_key)
     entry = get_catalog_entry(catalog, indicator_key)
     return {**entry, "backfill": backfill}
+
+
+# ── 手动刷新 + 运行历史（P2-4）───────────────────────────────────────────────
+
+from datetime import datetime as _datetime, timezone as _timezone  # noqa: E402
+
+#: refresh_log 中 status='running' 且 started_at 超过该时长的视为陈旧
+#: （进程中断未落 finished_at）→ 渲染层标注 interrupted，不改库
+_STALE_RUNNING_AFTER = _timedelta(hours=1)
+
+
+class ExternalIndicatorRefreshBody(BaseModel):
+    """POST /external-indicators/refresh 请求体。"""
+
+    keys: list[str] | None = None
+    backfill: bool = False
+
+
+@router.post("/external-indicators/refresh")
+def refresh_external_indicators(
+    catalog: CatalogDep, body: ExternalIndicatorRefreshBody | None = None
+) -> dict:
+    """手动触发外部指标刷新（同步执行返回 RefreshSummary，日线量级可接受）。
+
+    - 空 body / keys 缺省 → 全量 due 刷新（enabled 且到期，daily 每日 /
+      weekly ≥6 天 / monthly ≥25 天）
+    - ``keys`` 指定 → 仅刷这些 key。未知 key **不 404**：逐 key 以
+      ``status='error'``（"not in catalog"）进 summary，其余 key 继续
+    - ``backfill=True`` → 强制回填窗口（backfill_start..锚定日），否则增量
+      （max(trade_date)−4 .. 锚定日，5 日重叠吃近端修订）
+
+    sync ``def``：刷新含网络 IO 与 inter_source_delay（szse 回填 ~4 分钟），
+    走 FastAPI 线程池执行，不阻塞 event loop。
+    """
+    payload = body or ExternalIndicatorRefreshBody()
+    for k in payload.keys or []:
+        _validate_indicator_key(k)
+    from cquant.datahub.pipelines.indicator_sources.refresh import (
+        run_external_indicator_refresh,
+    )
+    summary = run_external_indicator_refresh(
+        catalog, keys=payload.keys, backfill=payload.backfill, trigger="manual"
+    )
+    return summary.as_dict() if hasattr(summary, "as_dict") else summary
+
+
+@router.get("/external-indicators/runs")
+def list_external_indicator_runs(
+    catalog: CatalogDep, key: str = "", limit: int = Query(50, ge=1, le=500)
+) -> dict:
+    """refresh_log 运行历史：started_at 倒序 LIMIT，``key`` 精确过滤。
+
+    ``interrupted`` 为渲染层标注（不改库）：status='running' 且 started_at
+    超过 1 小时视为进程中断遗留的陈旧条目。
+    """
+    sql = (
+        "SELECT run_id, indicator_key, source_name, started_at, finished_at, "
+        "status, trigger, range_start, range_end, rows_fetched, rows_upserted, "
+        "error FROM silver_external_indicator_refresh_log"
+    )
+    params: list = []
+    if key:
+        sql += " WHERE indicator_key = ?"
+        params.append(key)
+    sql += " ORDER BY started_at DESC, run_id DESC LIMIT ?"
+    params.append(limit)
+
+    now = _datetime.now(_timezone.utc)
+    items = []
+    for r in catalog.query(sql, params).rows(named=True):
+        d = dict(r)
+        started = d.get("started_at")
+        if isinstance(started, str):
+            started = _datetime.fromisoformat(started)
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=_timezone.utc)
+        d["interrupted"] = bool(
+            d.get("status") == "running"
+            and started is not None
+            and (now - started) > _STALE_RUNNING_AFTER
+        )
+        d["started_at"] = started.isoformat() if started is not None else None
+        fin = d.get("finished_at")
+        d["finished_at"] = fin.isoformat() if fin is not None else None
+        for f in ("range_start", "range_end"):
+            d[f] = str(d[f]) if d.get(f) is not None else None
+        items.append(d)
+    return {"items": items, "total": len(items)}

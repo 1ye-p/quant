@@ -112,6 +112,14 @@ class TestClamp:
             1024,
         )
 
+    def test_zero_or_negative_clamped_to_floor_of_1(self):
+        cfg = _cfg(timeout_connect_sec=0, timeout_total_sec=-5, max_bytes=0)
+        assert (cfg.timeout_connect_sec, cfg.timeout_total_sec, cfg.max_bytes) == (
+            1,
+            1,
+            1,
+        )
+
 
 class TestRedact:
     def test_env_var_reference_preserved(self):

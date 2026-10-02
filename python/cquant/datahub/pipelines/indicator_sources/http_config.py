@@ -19,10 +19,13 @@ Field semantics follow design §6.1. Validator policy decisions (§6.2):
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 _MAX_TIMEOUT_CONNECT_SEC = 60
 _MAX_TIMEOUT_TOTAL_SEC = 120
@@ -141,36 +144,41 @@ class CustomHTTPConfig(BaseModel):
             )
 
     def _clamp_limits(self) -> None:
-        # Lenient clamp-to-cap policy (design §6.2): values above the cap are
-        # clamped, values below remain as configured.
+        # Lenient clamp policy (design §6.2): values above the cap are clamped
+        # down; values below 1 (zero/negative) are clamped up to a sane floor
+        # — a 0-second timeout or 0-byte budget would break every request.
         object.__setattr__(
-            self, "timeout_connect_sec", min(self.timeout_connect_sec, _MAX_TIMEOUT_CONNECT_SEC)
+            self,
+            "timeout_connect_sec",
+            max(1, min(self.timeout_connect_sec, _MAX_TIMEOUT_CONNECT_SEC)),
         )
         object.__setattr__(
-            self, "timeout_total_sec", min(self.timeout_total_sec, _MAX_TIMEOUT_TOTAL_SEC)
+            self,
+            "timeout_total_sec",
+            max(1, min(self.timeout_total_sec, _MAX_TIMEOUT_TOTAL_SEC)),
         )
-        object.__setattr__(self, "max_bytes", min(self.max_bytes, _MAX_BYTES))
+        object.__setattr__(self, "max_bytes", max(1, min(self.max_bytes, _MAX_BYTES)))
 
     @field_validator("headers")
     @classmethod
     def _warn_on_plaintext_secrets(cls, v: dict[str, str]) -> dict[str, str]:
         # Validation layer only warns — research tool, users may deliberately
         # embed plaintext tokens. Redaction happens in redact_config().
-        for key, value in v.items():
-            if value.startswith("${") and value.endswith("}"):
-                continue  # env var reference, preferred
-            if _SECRET_KEY_HINTS.search(key) or any(
-                p.search(value) for p in _SECRET_PATTERNS
-            ):
-                # Warnings via pydantic info would be noisy here; a stderr
-                # warning keeps the save flow non-blocking.
-                import sys
-
-                print(
-                    f"WARNING: header {key!r} looks like a plaintext secret; "
-                    "consider using a ${{ENV_VAR}} reference instead.",
-                    file=sys.stderr,
-                )
+        risky_keys = [
+            key
+            for key, value in v.items()
+            if not (value.startswith("${") and value.endswith("}"))
+            and (
+                _SECRET_KEY_HINTS.search(key)
+                or any(p.search(value) for p in _SECRET_PATTERNS)
+            )
+        ]
+        if risky_keys:
+            logger.warning(
+                "headers %s look like plaintext secrets; consider using "
+                "${ENV_VAR} references instead",
+                risky_keys,
+            )
         return v
 
 

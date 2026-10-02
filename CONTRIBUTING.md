@@ -53,7 +53,7 @@ conda activate cQuanty
 
 ## 6. 行为准则
 
-暂未单独提供 CODE_OF_CONDUCT 文件；开源后将以仓库文件形式补充。在此之前，请遵循常规开源社区礼仪：尊重、聚焦技术、对新手友好。
+参与本社区请遵循 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)（基于 Contributor Covenant v2.1）：尊重、聚焦技术、对新手友好。
 
 ## 7. 安全相关
 

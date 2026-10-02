@@ -16,7 +16,7 @@ cQuant 是一个自用的量化研究平台，将数据接入、因子挖掘、�
 
 - **数据层**：DuckDB 三层数据仓库（Bronze / Silver / Gold），支持 TDX、Tushare、AKShare、Yahoo Finance 多数据源
 - **因子库**：526+ 内置因子（cQuant 原生 20+、Qlib Alpha158 50+、Vibe-Trading Alpha101 101 + 国泰君安 191 + Qlib158 扩展 154），声明式 DSL + DAG 执行引擎
-- **开源桥接**：`qlib_bridge/` 封装 Qlib 数据/评估/因子接口，`vibe_bridge/` 封装 Vibe-Trading Alpha 因子，外部模块只调用 bridge，不直接依赖上游 API（Swarm 团队/LLM 供应商适配未接线，已移至 `examples/vibe_trading_extras/`）
+- **开源桥接**：`qlib_bridge/` 封装 Qlib 数据/评估/因子接口，`vibe_bridge/` 封装 Vibe-Trading Alpha 因子，外部模块只调用 bridge，不直接依赖上游 API（Swarm 团队/LLM 供应商适配未接线，已移至 `examples/vibe_trading_extras/`——该目录仅手动测试用，勿加入 Python path 或安装，见其 README）
 - **回测引擎**：向量化回测（含 A 股印花税、涨跌停规则、T+1 结算）+ 事件驱动引擎（Rust pyo3）+ 异步回测（BackgroundTasks + job_id 轮询）
 - **策略模板**：行业轮动、市场中性、ML Model 策略、复合策略，支持信号校验与滑点模拟
 - **过拟合检测**：PSR / DSR / CPCV / Walk-Forward 统计验证，基于 Bailey & Lopez de Prado 方法

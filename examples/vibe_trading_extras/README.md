@@ -23,6 +23,15 @@ python -m pytest examples/vibe_trading_extras/tests/ -v --no-cov
 
 注意：`swarm.py` / `providers.py` 依赖 `lib/vibe-trading` 子模块存在，且继续 `import cquant.vibe_bridge._compat`（extras → bridge 是正常依赖方向）。
 
+## ⚠️ 不要把本目录加入 Python path 或 pip 安装
+
+本目录**不是包**：`swarm.py`、`providers.py` 以**顶层模块名**提供（`import swarm` / `import providers`），会与 PyPI 三方包及主包命名空间碰撞（`providers` 尤其常见）。因此：
+
+- **不要**把 `examples/vibe_trading_extras/` 加入 `PYTHONPATH`；
+- **不要**对其执行 `pip install` / `pip install -e`（无 `pyproject.toml`/`setup.py`，本就不符合安装条件）；
+- 其可导入性**仅在**手动跑 pytest 时经 `tests/conftest.py` 的临时 `sys.path` 注入生效（测试结束即失效）；
+- 任何脚本化消费请改为 `python -m pytest examples/vibe_trading_extras/tests/ -v --no-cov` 方式运行，或按下文「如何恢复」移回主包后走正规 import。
+
 ## 如何恢复（移回主包）
 
 1. 从 git 历史取回原位置：`git log --follow -- examples/vibe_trading_extras/swarm.py` 找到引入提交，取其父提交中的 `python/cquant/vibe_bridge/swarm.py`（`providers.py` 同理）。

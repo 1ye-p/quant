@@ -35,9 +35,17 @@
 
 ## 四、已知缺口（不阻塞开源，收录入 backlog）
 
-1. 行为准则（CODE_OF_CONDUCT.md）不存在——CONTRIBUTING 中暂不链接，开源后按社区惯例补充。
-2. `web/e2e/*.spec.ts`（Playwright）存在被 vitest 误拾取的风险（见 backlog #4）。
-3. `LICENSE` 已存在（类型见文件本身）；若计划采用双重许可（核心 + Rust 子模块），发布前确认各 LICENSE 头一致。
+> 2026-10-02 更新：1/2 已在后续批次补齐/修复，3 完成核对并出结论。
+
+1. ~~行为准则（CODE_OF_CONDUCT.md）不存在~~ → **已补**：根目录 `CODE_OF_CONDUCT.md`（Contributor Covenant v2.1 中文版）已新建，`CONTRIBUTING.md` §6 已链接（本批 commit）。
+2. ~~`web/e2e/*.spec.ts`（Playwright）存在被 vitest 误拾取的风险~~ → **已修**：commit `194ed4d` 在 vite config 中显式排除 e2e 目录，vitest 收集回归全绿（backlog #4 关联项）。
+3. **LICENSE 核对结论（2026-10-02，只读核对，未改任何 LICENSE 本体）**：各层级许可类型**不一致**——
+   - 根仓库 `LICENSE`：**Apache-2.0**
+   - `rust/` 子模块：**无 LICENSE 文件**（`rust/` 及 `rust/crates/` 各 crate 均未见 LICENSE*）
+   - `lib/vibe-trading` 子模块：**MIT**（Copyright (c) 2026 Vibe-Trading Contributors）
+   - `lib/qlib` 子模块：**MIT**（Copyright (c) Microsoft Corporation）
+
+   结论：**发布前需统一或分层声明**。lib/ 下两个上游子模块保留其原始 MIT 许可（fork/引用惯例，无需改动）；`rust/` 子模块需补充 LICENSE 文件；主仓库若维持 Apache-2.0，建议在根 README 或 NOTICE 中声明"主仓库 Apache-2.0，子模块遵循各自 LICENSE"的分层许可说明。
 
 ---
 
@@ -45,19 +53,19 @@
 
 > 收录 Phase 5 期间评审确认、不阻塞开源的遗留项。
 
-| # | 条目 | 来源 | 说明 |
-|---|------|------|------|
-| 1 | 因子/策略命令面板弱跳转 | Task 3 评审 | Cmd+K 面板跳转到目标页后，无按名称深链参数，无法自动定位/选中具体因子或策略 |
-| 2 | WelcomePage/AppLayout deferred minors | Task 3 评审 | 面板重开重复拉取无缓存；语言快照不刷新等 |
-| 3 | 既有测试失败：StrategiesPage 1 例 | main 上既有失败 | 单例断言失败，非本次改动引入 |
-| 4 | e2e/*.spec.ts 被 vitest 误拾取 | 测试基建 | `web/e2e/` 下 Playwright spec 与 vitest 的默认 include 规则冲突，需在 vite config 中显式排除 |
-| 5 | ML tab 评审 minors | Task 2/4.5 评审 | RO 命令提示列表不全等小问题 |
-| 6 | vibe extras 顶层命名碰撞面 | Task 4 评审 | 已移至 examples（commit 50f913b），但 examples 内脚本若被直接 pip 安装/导入，顶层模块名仍有与主包碰撞的隐患，需文档提醒或改造为包内相对引用 |
-| 7 | 行为准则缺失 | 本次核对 | 新建 CODE_OF_CONDUCT.md 并在 CONTRIBUTING 链接 |
-| 8 | 双引擎 parity 形式化 | 设计 §5 #1 | 主路径为向量化引擎；开源后 revisit Rust 事件引擎 parity 测试与编译体验 |
-| 9 | 数据广度缺口 | 设计 §5 #7 | 分钟/tick/期货/期权/两融/北向/龙虎榜/宏观；开源后按社区需求排期 |
-| 10 | catalog-only DELETE 的目录行会被下次启动迁移复活 | ext-ind P1 review | backfill 走 INSERT OR IGNORE，被删目录行（未 purge_data 的 key）会在下次启动迁移时复活——行为与验收语义一致但用户无感知；建议 DELETE 响应提示复活语义或引入 disabled 软删概念 |
+| # | 条目 | 来源 | 状态 | 说明 |
+|---|------|------|------|------|
+| 1 | 因子/策略命令面板弱跳转 | Task 3 评审 | deferred | 特性工作：按名深链需目标页支持 |
+| 2 | WelcomePage/AppLayout deferred minors | Task 3 评审 | ✅ 已清除（commit 541b301） | 面板重开重复拉取无缓存；语言快照不刷新等 |
+| 3 | 既有测试失败：StrategiesPage 1 例 | main 上既有失败 | ✅ 已自愈 | 后续批次消化，2026-10-02 复测 4/4 通过、src 全量 33 文件/170 用例绿 |
+| 4 | e2e/*.spec.ts 被 vitest 误拾取 | 测试基建 | ✅ 已清除（commit 194ed4d） | vite config 显式排除 e2e 目录，vitest 收集不再误拾取 |
+| 5 | ML tab 评审 minors | Task 2/4.5 评审 | ✅ 已清除（commit 541b301） | RO 命令提示列表不全等小问题 |
+| 6 | vibe extras 顶层命名碰撞面 | Task 4 评审 | ✅ 已清除（本批 commit） | `examples/vibe_trading_extras/README.md` 已补强 caveat：勿加入 Python path / 勿 pip 安装，仅在手动 pytest 时经 conftest sys.path 生效；根 README 相关提及处同步加注 |
+| 7 | 行为准则缺失 | 本次核对 | ✅ 已清除（本批 commit） | 根 `CODE_OF_CONDUCT.md`（Contributor Covenant v2.1 中文版）已新建，`CONTRIBUTING.md` §6 已链接 |
+| 8 | 双引擎 parity 形式化 | 设计 §5 #1 | deferred | 设计 §5 #1：开源后 revisit Rust 事件引擎 parity 测试与编译体验 |
+| 9 | 数据广度缺口 | 设计 §5 #7 | deferred | 设计 §5 #7：分钟/tick/期货/期权/两融/北向/龙虎榜/宏观，按社区需求排期 |
+| 10 | catalog-only DELETE 的目录行会被下次启动迁移复活 | ext-ind P1 review | ✅ 已清除（commit 541b301） | DELETE 响应已提示复活语义 |
 
 ## 六、结论
 
-四要素全部达成（✅），可以开源。以上 9 条 backlog 均为非阻塞项，建议开源后按 #4（测试基建，影响贡献者 CI 体验）与 #7（社区规范）优先处理。
+四要素全部达成（✅），可以开源。backlog 10 项中：**6 项已清除**（#2/#5/#10 → commit 541b301；#4 → commit 194ed4d；#6/#7 → 本批 commit）、**1 项已自愈**（#3，2026-10-02 复测 src 全量 33 文件/170 用例绿）、**3 项 deferred**（#1/#8/#9，均为特性类工作，非缺陷：#1 深链待目标页支持、#8/#9 按设计 §5 与社区需求排期）。原优先级建议中 #4（测试基建）与 #7（社区规范）均已在后续批次完成；剩余 deferred 项无阻塞，按社区反馈排期即可。

@@ -56,7 +56,7 @@
 | # | 条目 | 来源 | 状态 | 说明 |
 |---|------|------|------|------|
 | 1 | 因子/策略命令面板弱跳转 | Task 3 评审 | deferred | 特性工作：按名深链需目标页支持 |
-| 2 | WelcomePage/AppLayout deferred minors | Task 3 评审 | ✅ 已清除（commit 541b301） | 面板重开重复拉取无缓存；语言快照不刷新等 |
+| 2 | CommandPalette/AppLayout deferred minors | Task 3 评审 | ✅ 已清除（commit 541b301） | 面板重开重复拉取无缓存；语言快照不刷新等（Task 3 范围即命令面板 + AppLayout 挂载，未含 WelcomePage 项） |
 | 3 | 既有测试失败：StrategiesPage 1 例 | main 上既有失败 | ✅ 已自愈 | 后续批次消化，2026-10-02 复测 4/4 通过、src 全量 33 文件/170 用例绿 |
 | 4 | e2e/*.spec.ts 被 vitest 误拾取 | 测试基建 | ✅ 已清除（commit 194ed4d） | vite config 显式排除 e2e 目录，vitest 收集不再误拾取 |
 | 5 | ML tab 评审 minors | Task 2/4.5 评审 | ✅ 已清除（commit 541b301） | RO 命令提示列表不全等小问题 |

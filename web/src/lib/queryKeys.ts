@@ -83,6 +83,9 @@ export const extendedQueryKeys = {
     positions: (id: string) => ['live', 'positions', id] as const,
     risk: (id: string) => ['live', 'risk', id] as const,
   },
+  factors: {
+    available: ['factors', 'available'] as const,
+  },
   factorAnalytics: {
     definitions: () => ['factors', 'definitions'] as const,
     icJob: (id: string) => ['factors', 'ic', id] as const,

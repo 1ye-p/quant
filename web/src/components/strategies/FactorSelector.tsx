@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { factorsApi, type AvailableFactor } from '@/lib/api/factors'
 import { FactorHelpPanel } from './FactorHelpPanel'
+import { extendedQueryKeys } from '@/lib/queryKeys'
 
 interface FactorSelectorProps {
   selected: string[]
@@ -22,7 +23,7 @@ export function FactorSelector({ selected, onChange }: FactorSelectorProps) {
   const [search, setSearch] = useState('')
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['factors', 'available'],
+    queryKey: extendedQueryKeys.factors.available,
     queryFn: () => factorsApi.getAvailable(),
     staleTime: 300_000, // 5 minutes
   })

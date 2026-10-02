@@ -198,7 +198,7 @@ export function StrategyDSLEditor({ strategyId, initialConfig = '', onClose, onS
 
   // 因子目录：score 下拉 + 存在性校验
   const { data: factorsCatalog } = useQuery({
-    queryKey: ['factors', 'available'],
+    queryKey: extendedQueryKeys.factors.available,
     queryFn: () => factorsApi.getAvailable(),
     staleTime: 300_000,
   })

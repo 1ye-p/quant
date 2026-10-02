@@ -31,6 +31,7 @@ export function CreateFactorModal({ onClose }: CreateFactorModalProps) {
       customFactorApi.create(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['factors', 'definitions'] })
+      qc.invalidateQueries({ queryKey: ['factors', 'available'] })
       toast.success(t('component.factors.create_factor_modal.toast_created'))
       onClose()
     },

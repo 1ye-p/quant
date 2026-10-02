@@ -85,7 +85,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   // 5-minute staleTime makes close→reopen serve from cache instead of
   // refetching all three APIs.
   const { data: factorsData } = useQuery({
-    queryKey: ['factors', 'available'],
+    queryKey: extendedQueryKeys.factors.available,
     queryFn: () => factorsApi.getAvailable(),
     enabled: open,
     staleTime: PALETTE_STALE_MS,

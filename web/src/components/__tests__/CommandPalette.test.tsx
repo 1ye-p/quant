@@ -176,11 +176,15 @@ describe('CommandPalette (Cmd+K)', () => {
 
   it('re-labels factor entries when the language changes while open (#2b)', async () => {
     renderWithProviders(<CommandPalette open onClose={() => {}} />)
-    await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
-    await i18n.changeLanguage('en-US')
-    // labels are recomputed reactively — label_en from the same cached data
-    await waitFor(() => expect(screen.getByText('20d Momentum')).toBeInTheDocument())
-    expect(screen.queryByText('20日动量')).not.toBeInTheDocument()
-    await i18n.changeLanguage('zh-CN')
+    try {
+      await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
+      await i18n.changeLanguage('en-US')
+      // labels are recomputed reactively — label_en from the same cached data
+      await waitFor(() => expect(screen.getByText('20d Momentum')).toBeInTheDocument())
+      expect(screen.queryByText('20日动量')).not.toBeInTheDocument()
+    } finally {
+      // restore even when an assertion throws — the global i18n is file-shared
+      await i18n.changeLanguage('zh-CN')
+    }
   })
 })

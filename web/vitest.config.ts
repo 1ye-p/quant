@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
@@ -13,6 +13,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/setupTests.ts'],
-    exclude: ['e2e/**', '**/node_modules/**', '**/dist/**'],
+    // Spread configDefaults (cypress/.idea/.git etc.) instead of replacing them
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 })

@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS silver_external_indicator_catalog (
     pinned_source        VARCHAR,
     source_config        JSON,
     available_date_rule  VARCHAR NOT NULL DEFAULT 'B',
-    frequency            VARCHAR NOT NULL DEFAULT 'daily',
+    frequency            VARCHAR NOT NULL DEFAULT 'daily',  -- 'daily' | 'weekly' | 'monthly'
     backfill_start       DATE,
     enabled              BOOLEAN NOT NULL DEFAULT TRUE,
     last_refresh_at      TIMESTAMPTZ,

@@ -731,7 +731,7 @@ class CatalogPatchBody(BaseModel):
 
 
 _IND_KEY_RE = _re.compile(r"^[a-z_0-9]+$")
-_FREQ_ALLOWED = {"daily", "weekly"}
+_FREQ_ALLOWED = {"daily", "weekly", "monthly"}
 _RULE_ALLOWED = {"A", "B"}
 
 
@@ -919,3 +919,119 @@ async def import_external_indicators(
         raise HTTPException(status_code=500, detail=f"导入失败：{exc}") from exc
     finally:
         path.unlink(missing_ok=True)
+
+
+# ── Builtin indicator registry (P2-1) ────────────────────────────────────────
+
+from datetime import date as _date, timedelta as _timedelta
+
+from cquant.datahub.pipelines.indicator_sources.builtin_registry import (
+    BUILTIN_BY_KEY as _BUILTIN_BY_KEY,
+    BUILTIN_CATALOG as _BUILTIN_CATALOG,
+    source_ready as _source_ready,
+)
+
+
+class BuiltinEnableBody(BaseModel):
+    """POST /external-indicators/builtins/{key}/enable 请求体。"""
+
+    backfill_start: str | None = None
+
+
+def _default_backfill_start(catalog, years: int) -> str:
+    """锚定日（silver_prices_1d max(trade_date)，缺省 today）− years 年。"""
+    df = catalog.query("SELECT max(trade_date) AS a FROM silver_prices_1d")
+    anchor = df.item(0, "a") or _date.today()
+    if isinstance(anchor, str):
+        anchor = _date.fromisoformat(str(anchor)[:10])
+    try:
+        return anchor.replace(year=anchor.year - years).isoformat()
+    except ValueError:  # 02-29 → 02-28
+        return anchor.replace(year=anchor.year - years, day=28).isoformat()
+
+
+def _run_builtin_backfill(catalog, indicator_key: str):
+    """同步触发回填（late-import：refresh 模块 P2-3 交付）。
+
+    模块尚未落地时 ImportError → 返回 pending 标记而非失败；P2-3 合入后
+    自然接通，P2-7 e2e 验证真实链路。
+    """
+    try:
+        from cquant.datahub.pipelines.indicator_sources.refresh import (
+            run_external_indicator_refresh,
+        )
+    except ImportError:
+        return "pending"
+    return run_external_indicator_refresh(
+        catalog, keys=[indicator_key], backfill=True, trigger="manual"
+    )
+
+
+@router.get("/external-indicators/builtins")
+async def list_builtin_indicators(catalog: CatalogDep) -> dict:
+    """内置指标目录（spike 锁定 12 条）：候选源就绪态 + enabled 对齐目录行。"""
+    enabled_by_key = {
+        r["indicator_key"]: r["enabled"]
+        for r in catalog.query(
+            "SELECT indicator_key, enabled FROM silver_external_indicator_catalog "
+            "WHERE indicator_key IN ("
+            + ",".join(f"'{d.indicator_key}'" for d in _BUILTIN_CATALOG)
+            + ")"
+        ).rows(named=True)
+    }
+    items = [
+        {
+            "indicator_key": d.indicator_key,
+            "display_name": d.display_name,
+            "unit": d.unit,
+            "description": d.description,
+            "available_date_rule": d.available_date_rule,
+            "frequency": d.frequency,
+            "default_backfill_years": d.default_backfill_years,
+            "candidates": [
+                {"name": name, "ready": _source_ready(name)} for name in d.candidates
+            ],
+            "enabled": bool(enabled_by_key.get(d.indicator_key, False)),
+        }
+        for d in _BUILTIN_CATALOG
+    ]
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/external-indicators/builtins/{indicator_key}/enable")
+async def enable_builtin_indicator(
+    catalog: CatalogDep, indicator_key: str, body: BuiltinEnableBody | None = None
+) -> dict:
+    """启用内置指标：写目录行（source_type='builtin'）+ 同步触发回填。
+
+    幂等：重复 enable 仅刷新目录行并重触发回填，不报错。回填模块（P2-3）
+    未就绪时返回 ``backfill: "pending"``。key 不在注册表 → 404。
+    """
+    _validate_indicator_key(indicator_key)
+    defn = _BUILTIN_BY_KEY.get(indicator_key)
+    if defn is None:
+        raise HTTPException(
+            status_code=404, detail=f"内置指标不存在：'{indicator_key}'"
+        )
+    payload = body or BuiltinEnableBody()
+    backfill_start = payload.backfill_start or _default_backfill_start(
+        catalog, defn.default_backfill_years
+    )
+    upsert_catalog_entry(
+        catalog,
+        CatalogEntryInput(
+            indicator_key=defn.indicator_key,
+            display_name=defn.display_name,
+            unit=defn.unit,
+            description=defn.description,
+            source_type="builtin",
+            source_name="builtin",
+            available_date_rule=defn.available_date_rule,
+            frequency=defn.frequency,
+            backfill_start=backfill_start,
+            enabled=True,
+        ),
+    )
+    backfill = _run_builtin_backfill(catalog, indicator_key)
+    entry = get_catalog_entry(catalog, indicator_key)
+    return {**entry, "backfill": backfill}

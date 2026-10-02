@@ -20,7 +20,7 @@ from cquant.datahub.catalog import Catalog
 _INDICATOR_KEY_RE = re.compile(r"^[a-z_0-9]+$")
 
 # stale tolerance in trading days, keyed by catalog `frequency`
-STALE_TOLERANCE_TRADING_DAYS = {"daily": 3, "weekly": 10}
+STALE_TOLERANCE_TRADING_DAYS = {"daily": 3, "weekly": 10, "monthly": 25}
 _DEFAULT_TOLERANCE = 3
 
 _CATALOG_COLS = (

@@ -173,8 +173,9 @@ class TestPatchCatalogEntry:
 
     def test_patch_invalid_frequency_400(self, client, catalog):
         _seed(catalog)
+        # P2-1 起 monthly 合法（估值月频指标），改用仍非法的值
         resp = client.patch(
-            f"{_BASE}/margin_balance", json={"frequency": "monthly"}
+            f"{_BASE}/margin_balance", json={"frequency": "quarterly"}
         )
         assert resp.status_code == 400
 

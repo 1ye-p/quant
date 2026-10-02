@@ -697,6 +697,153 @@ from cquant.datahub.pipelines.external_indicator_importer import (
     ImportConfig,
     preview_csv,
 )
+from cquant.datahub.pipelines.indicator_catalog import (
+    CatalogEntryInput,
+    delete_catalog_entry,
+    get_catalog_entry,
+    list_catalog,
+    upsert_catalog_entry,
+)
+from pydantic import BaseModel
+
+import re as _re
+
+
+class CatalogPatchBody(BaseModel):
+    """PATCH /external-indicators/catalog/{key} 白名单请求体。
+
+    P1 白名单：display_name / unit / description / frequency / enabled /
+    available_date_rule / backfill_start。
+    ``pinned_source`` / ``source_config`` 是 P2/P3 保留字段——出现在请求中
+    直接 400（而非静默忽略），避免调用方误以为已生效。
+    """
+
+    display_name: str | None = None
+    unit: str | None = None
+    description: str | None = None
+    frequency: str | None = None
+    enabled: bool | None = None
+    available_date_rule: str | None = None
+    backfill_start: str | None = None
+    # P2/P3 保留字段：仅为了能给出明确的 400 提示，不会被写入
+    pinned_source: str | None = None
+    source_config: str | None = None
+
+
+_IND_KEY_RE = _re.compile(r"^[a-z_0-9]+$")
+_FREQ_ALLOWED = {"daily", "weekly"}
+_RULE_ALLOWED = {"A", "B"}
+
+
+def _validate_indicator_key(indicator_key: str) -> None:
+    if not _IND_KEY_RE.match(indicator_key):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"indicator_key 非法：'{indicator_key}'，"
+                "仅允许小写字母/数字/下划线 [a-z_0-9]+"
+            ),
+        )
+
+
+@router.get("/external-indicators/catalog")
+async def list_external_indicator_catalog(catalog: CatalogDep) -> dict:
+    """外部指标目录列表（live 新鲜度：latest_trade_date / stale 实时计算）。"""
+    items = list_catalog(catalog)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/external-indicators/catalog/{indicator_key}")
+async def get_external_indicator_catalog_entry(
+    catalog: CatalogDep, indicator_key: str
+) -> dict:
+    """目录详情 + preview（该 key 数据尾部 30 行，升序）。"""
+    _validate_indicator_key(indicator_key)
+    entry = get_catalog_entry(catalog, indicator_key)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail=f"indicator_key 不存在：'{indicator_key}'"
+        )
+    return entry
+
+
+@router.patch("/external-indicators/catalog/{indicator_key}")
+async def patch_external_indicator_catalog_entry(
+    catalog: CatalogDep, indicator_key: str, body: CatalogPatchBody
+) -> dict:
+    """部分更新目录行（白名单字段；None 字段保留原值）。
+
+    校验：frequency ∈ {daily, weekly}；available_date_rule ∈ {A, B}；
+    indicator_key 沿 [a-z_0-9]+。``pinned_source`` / ``source_config`` 为
+    P2/P3 保留字段，请求中出现即 400。
+    """
+    _validate_indicator_key(indicator_key)
+    if body.frequency is not None and body.frequency not in _FREQ_ALLOWED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"frequency 非法：'{body.frequency}'，允许 {sorted(_FREQ_ALLOWED)}",
+        )
+    if (
+        body.available_date_rule is not None
+        and body.available_date_rule not in _RULE_ALLOWED
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"available_date_rule 非法：'{body.available_date_rule}'，"
+                f"允许 {sorted(_RULE_ALLOWED)}"
+            ),
+        )
+    reserved = [f for f in ("pinned_source", "source_config") if getattr(body, f) is not None]
+    if reserved:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"字段 {reserved} 为 P2/P3 保留字段，P1 不支持通过 PATCH 修改；"
+                "请从请求中移除"
+            ),
+        )
+    if get_catalog_entry(catalog, indicator_key) is None:
+        raise HTTPException(
+            status_code=404, detail=f"indicator_key 不存在：'{indicator_key}'"
+        )
+    upsert_catalog_entry(
+        catalog,
+        CatalogEntryInput(
+            indicator_key=indicator_key,
+            display_name=body.display_name,
+            unit=body.unit,
+            description=body.description,
+            frequency=body.frequency,
+            enabled=body.enabled,
+            available_date_rule=body.available_date_rule,
+            backfill_start=body.backfill_start,
+        ),
+    )
+    return get_catalog_entry(catalog, indicator_key)
+
+
+@router.delete("/external-indicators/catalog/{indicator_key}")
+async def delete_external_indicator_catalog_entry(
+    catalog: CatalogDep, indicator_key: str, purge_data: bool = False
+) -> dict:
+    """删除目录行。``purge_data=true`` 时连 ``silver_external_indicators``
+    中该 key 的全部数据行一并删除（默认 false 保留数据）。"""
+    _validate_indicator_key(indicator_key)
+    if get_catalog_entry(catalog, indicator_key) is None:
+        raise HTTPException(
+            status_code=404, detail=f"indicator_key 不存在：'{indicator_key}'"
+        )
+    delete_catalog_entry(catalog, indicator_key, purge_data=purge_data)
+    return {
+        "deleted": indicator_key,
+        "purged_data": purge_data,
+        "detail": (
+            "目录行已删除，且数据行已一并清除"
+            if purge_data
+            else "目录行已删除；数据行保留（如需清除请传 purge_data=true）"
+        ),
+    }
 
 
 _ALLOWED_SUFFIXES = {".csv"}

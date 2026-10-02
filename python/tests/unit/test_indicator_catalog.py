@@ -118,19 +118,20 @@ def test_list_catalog_stale_when_behind_anchor_beyond_tolerance(tmp_path):
 def test_stale_never_uses_current_date(tmp_path):
     """B2 regression: anchor is silver_prices_1d max(trade_date), not wall clock.
 
-    Indicator data is 'yesterday' by wall clock but the prices store itself is
-    stale (anchor 30 days ago). Correct anchoring → NOT stale; a CURRENT_DATE
-    anchor would wrongly flag it.
+    Indicator data lags the wall clock by 10 days (beyond the 3-day stale
+    tolerance) yet still leads the prices-store anchor by 20 days. Correct
+    anchoring → NOT stale; any CURRENT_DATE anchor (calendar-day diff or
+    trading-day count) would wrongly flag it stale.
     """
     cat = _make_catalog(tmp_path)
     anchor = date.today() - timedelta(days=30)
     _insert_price(cat, anchor)
-    _insert_indicator(cat, "src", "gdp_yoy", date.today() - timedelta(days=1),
+    _insert_indicator(cat, "src", "gdp_yoy", date.today() - timedelta(days=10),
                       "2026-09-29 09:00:00")
 
     backfill_catalog_from_data(cat)
     r = list_catalog(cat)[0]
-    assert r["latest_trade_date"] == date.today() - timedelta(days=1)
+    assert r["latest_trade_date"] == date.today() - timedelta(days=10)
     assert r["latest_trade_date"] > anchor
     assert r["stale"] is False
 

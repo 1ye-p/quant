@@ -166,9 +166,10 @@ def get_catalog_entry(catalog: Catalog, indicator_key: str) -> dict | None:
 class CatalogEntryInput:
     """Upsert payload. ``indicator_key`` required; every other field optional.
 
-    Partial-update semantics: on conflict, ``None`` fields keep their existing
-    stored value (via ``COALESCE(excluded.x, x)``) — a field can therefore not
-    be explicitly cleared back to NULL through this interface. On fresh insert,
+    Partial-update semantics: on conflict, the ``DO UPDATE SET`` list is built
+    dynamically from provided (non-``None``) fields only — ``None`` fields are
+    omitted from the SET list and keep their existing stored value, so a field
+    cannot be explicitly cleared back to NULL through this interface. On fresh insert,
     NOT NULL columns fall back to defaults: ``display_name=indicator_key``,
     ``source_type='custom_http'``, ``source_name='manual'``,
     ``available_date_rule='B'``, ``frequency='daily'``, ``enabled=TRUE``.

@@ -855,5 +855,42 @@
    "trace_tail": "Exception: 抱歉，您没有接口(fx_obasic)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。",
    "elapsed_s": 0.1
   }
- ]
+ ],
+ "supplements": {
+  "added_at": "2026-10-02T12:05:00",
+  "note": "evidence fixes appended after doc review (commit 897134c review findings); produced by the probes now embedded in ext_ind_spike.py",
+  "records": [
+   {
+    "label": "ak|bond_zh_us_rate|深度探针(start_date=20180101)",
+    "status": "OK",
+    "rows_since_2018": 2333,
+    "date_min": "2018-01-02",
+    "date_max": "2026-10-01",
+    "cn_10y_non_null_rows": 2186,
+    "purpose": "evidence for cn_gov_yield_10y depth claim (≥2018, 2333 daily rows)"
+   },
+   {
+    "label": "ak|hsgt_hist_em|历史累计净买额单位验证",
+    "status": "OK",
+    "samples": [
+     {
+      "日期": "2021-12-31",
+      "当日成交净买额": 45.7302,
+      "历史累计净买额": 1.63457779
+     },
+     {
+      "日期": "2023-12-29",
+      "当日成交净买额": -5.662,
+      "历史累计净买额": 1.76830154
+     },
+     {
+      "日期": "2024-08-16",
+      "当日成交净买额": -67.7499,
+      "历史累计净买额": 1.76152249
+     }
+    ],
+    "conclusion": "累计列量级 ~1.6-1.8，对照公开常识北向累计峰值 ~2.3 万亿元 → 单位为万亿元（与当日净买亿元列比值 1e-4）"
+   }
+  ]
+ }
 }

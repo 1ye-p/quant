@@ -174,7 +174,9 @@ def build_probes():
         return ak.rate_interbank()
     probes.append(("ak|rate_interbank_shibor|Shibor隔夜", _shibor, None))
     probes.append(("ak|bond_zh_us_rate|中美国债收益率(10Y)",
-                   lambda: ak.bond_zh_us_rate(start_date="20250901"), None))
+                   lambda: ak.bond_zh_us_rate(start_date="20250901"),
+                   # depth probe: full range since 2018 to evidence historical depth
+                   lambda: ak.bond_zh_us_rate(start_date="20180101")))
 
     # ---- 汇率 ----
     for fname, fn_builder, lbl in [

@@ -300,6 +300,35 @@ def test_builtin_indicator_to_regime_backtest_e2e(e2e_catalog, client) -> None:
     assert log["source_name"] == FAKE_SOURCE_NAME
     assert log["status"] == "ok"
 
+    # 4b. P3-6 覆盖预检：走真 create 路由，指标覆盖完整 → warnings 为空。
+    # 桩掉 _run_backtest 避免重复跑完整回测（步骤 5 已直接跑生产 runner）。
+    import cquant.api_server.routes.backtests as bt_routes
+
+    cat.execute(
+        "INSERT INTO meta_strategy_configs "
+        "(strategy_id, config_format, config_text, created_at, updated_at) "
+        "VALUES ('extind_regime_e2e', 'json', '{}', now(), now())"
+    )
+    monkeypatch_bt = pytest.MonkeyPatch()
+    monkeypatch_bt.setattr(bt_routes, "_run_backtest", lambda c, s: "stub_run")
+    try:
+        resp_bt = client.post(
+            "/api/v1/backtests",
+            json={
+                "strategy_id": "extind_regime_e2e",
+                "dataset_version": "v1",
+                "strategy_type": "DSL",
+                "dsl_spec": DSL_SPEC,
+                "start_date": DATES[50].isoformat(),
+                "end_date": ANCHOR.isoformat(),
+                "feature_set_version": FEATURE_SET,
+            },
+        )
+    finally:
+        monkeypatch_bt.undo()
+    assert resp_bt.status_code == 201, resp_bt.text
+    assert resp_bt.json().get("warnings", []) == []  # 覆盖完整 → 空/省略
+
     # 5. regime 回测——走 run.py 生产装配，指标由 PIT loader 真实消费
     run_id = _run_regime_backtest(cat)
     hist_path = Path("data/backtest_artifacts") / f"{run_id}_regime.parquet"

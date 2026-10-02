@@ -546,6 +546,25 @@ async def create_backtest(
         if not fsv_df.is_empty():
             feature_set_version = fsv_df["feature_set_version"].item()
 
+    # ── P3-6: regime indicator coverage precheck (warn, not gate) ─────────────
+    # DSL 策略含 regime 段时同步预检指标覆盖；任何预检异常都不得阻断创建。
+    regime_warnings: list[str] = []
+    has_regime = bool(dsl_spec and dsl_spec.get("regime"))
+    if has_regime:
+        try:
+            from cquant.api_server.routes.indicator_coverage import (
+                check_regime_indicator_coverage,
+            )
+            regime_warnings = check_regime_indicator_coverage(
+                catalog,
+                (dsl_spec or {}).get("regime", {}).get("indicators") or {},
+                start,
+                end,
+            )
+        except Exception as exc:  # pragma: no cover - defensive, warn-level
+            logger.warning("regime indicator coverage precheck failed: %s", exc)
+            regime_warnings = []
+
     spec = BacktestRunSpec(
         dataset_version=body.dataset_version,
         strategy_id=body.strategy_id,
@@ -617,7 +636,12 @@ async def create_backtest(
             _save_job(catalog, job_id, "backtest", "failed", error=f"Backtest failed: {str(exc)[:200]}")
 
     background_tasks.add_task(run_job_async, _run_job)
-    return {"job_id": job_id, "strategy_id": body.strategy_id, "status": "running", "warning": scoring_date_warning}
+    resp = {"job_id": job_id, "strategy_id": body.strategy_id, "status": "running", "warning": scoring_date_warning}
+    # P3-6: warnings 仅在 dsl_spec 含 regime 段时出现（可能为空列表）；
+    # 非 DSL / 无 regime 创建路径响应零变化。
+    if has_regime:
+        resp["warnings"] = regime_warnings
+    return resp
 
 
 @router.get("/jobs/{job_id}")

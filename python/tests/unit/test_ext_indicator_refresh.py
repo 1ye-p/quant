@@ -104,15 +104,6 @@ def _entry(key: str, **kw) -> dict:
 
 
 class TestResolveSource:
-    def test_pinned_hit(self):
-        ak, ts = FakeAdapter("akshare"), FakeAdapter("tushare")
-        # shibor candidates=(akshare, tushare)；pinned tushare → 命中 tushare
-        ad = resolve_source(
-            _entry("shibor_overnight", pinned_source="tushare"),
-            {"akshare": ak, "tushare": ts},
-        )
-        assert ad is ts
-
     def test_pinned_tushare_used_when_ready(self, monkeypatch):
         """pinned tushare + tushare_ready=True → tushare 优先（candidates 前）。"""
         monkeypatch.setattr(

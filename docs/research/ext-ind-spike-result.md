@@ -87,3 +87,29 @@ conda run -n cQuanty python scripts/spike/ext_ind_spike.py
 ```
 
 红线遵守：仅新增 spike 文档 + 脚本 + 结果 JSON；未改任何生产代码；tushare token 值全程未打印（仅记录存在性 True/False）。
+
+## 附录：真实环境手动拉通记录（P2 验收）
+
+- 日期：2026-10-02；环境：conda cQuanty，真实 akshare 公开接口（`rate_interbank`），真 AkshareIndicatorAdapter 生产代码路径
+- 隔离：tmp catalog（`/tmp/ext_ind_pullthrough/pullthrough.duckdb`），未触碰 `data/catalog.duckdb`；tmp 库无行情，按设计种入一行锚定价格（`silver_prices_1d` max(trade_date) = 当日），否则刷新窗口拒绝猜测（NoSourceReadyError，已实测该保护生效）
+- 指标：`shibor_overnight`（akshare 全史一次拉，非 szse 逐日循环）
+
+### 执行记录（TestClient，真路由真适配器）
+
+| 步骤 | 调用 | 耗时 | 结果 |
+|------|------|------|------|
+| 1. enable | `POST /api/v1/datasets/external-indicators/builtins/shibor_overnight/enable`（backfill_start=近 1 年） | 5.1s | 200；目录行 builtin/enabled；回填 summary ok |
+| 2. 回填入库 | （enable 内 `_run_builtin_backfill`，真网络） | — | 247 行，范围 2025-10-09 → 2026-09-30 |
+| 3. 手动增量 | `POST /api/v1/datasets/external-indicators/refresh`（keys=[shibor_overnight]） | 1.7s | 200；ok；UPSERT 幂等（总行数 247 不变） |
+| 4. 管理页可见性 | `GET /api/v1/datasets/external-indicators/catalog` | — | `latest_trade_date=2026-09-30`、`stale=false`、`last_status=ok`、`source_name=akshare`（tushare 无 token 回落 akshare，与设计一致） |
+
+### 最新数据日推进对比
+
+| 阶段 | 行数 | 最新数据日 |
+|------|------|-----------|
+| 回填后 | 247 | 2026-09-30（源端最新交易日） |
+| 增量后 | 247 | 2026-09-30（窗口 max−4..锚定日 重叠 UPSERT，幂等无重复） |
+
+结论：enable→回填→手动增量→管理页可见全链真实拉通，验收第 2 条由 partial 补齐为完成。
+
+备注（非本验收缺陷）：tmp DuckDB 在 `conda run` 硬退出下 WAL 未 checkpoint，进程内断言全部通过；跨进程复验需同进程执行（脚本 `/tmp/ext_ind_pullthrough.py` 模式）。

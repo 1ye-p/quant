@@ -44,6 +44,8 @@ from cquant.datahub.pipelines.indicator_sources.refresh import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+pytestmark = pytest.mark.integration
+
 N_DAYS = 500
 START = date(2024, 1, 1)
 DATES = [START + timedelta(days=i) for i in range(N_DAYS)]

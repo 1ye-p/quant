@@ -13,6 +13,7 @@ const {
   testExtIndCustomMock,
   getExtIndCatalogMock,
   patchExtIndCatalogMock,
+  deleteExtIndCatalogMock,
 } = vi.hoisted(() => ({
   listExtIndBuiltinsMock: vi.fn(),
   enableExtIndBuiltinMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   testExtIndCustomMock: vi.fn(),
   getExtIndCatalogMock: vi.fn(),
   patchExtIndCatalogMock: vi.fn(),
+  deleteExtIndCatalogMock: vi.fn(),
 }))
 
 // Spread the actual module so ApiError / extractExtIndStageError stay real;
@@ -84,6 +86,7 @@ vi.mock('@/lib/api', async importOriginal => {
     testExtIndCustom: testExtIndCustomMock,
     getExtIndCatalog: getExtIndCatalogMock,
     patchExtIndCatalog: patchExtIndCatalogMock,
+    deleteExtIndCatalog: deleteExtIndCatalogMock,
   },
   }
 })
@@ -357,5 +360,22 @@ describe('ExternalIndicatorsPage', () => {
     expect(await screen.findByText(/指标键已存在（409）/)).toBeInTheDocument()
     // form is still open
     expect(screen.getByText('新建自定义源（custom_http）')).toBeInTheDocument()
+  })
+
+  // ── Delete dialog resurrect notice (backlog #10) ───────────────────────────
+
+  it('delete dialog shows the resurrect notice only when purge is unchecked', async () => {
+    deleteExtIndCatalogMock.mockResolvedValue({ deleted: 'margin_balance', purged_data: false })
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click((await screen.findAllByText('删除'))[0])
+
+    // purge unchecked → catalog row will be recreated by the startup migration
+    expect(await screen.findByText(/下次服务启动迁移时自动重建/)).toBeInTheDocument()
+    expect(screen.getByText('仅删目录')).toBeInTheDocument()
+
+    // checking purge hides the notice and switches to the destructive wording
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(screen.queryByText(/下次服务启动迁移时自动重建/)).not.toBeInTheDocument()
+    expect(screen.getByText('连数据一起删除')).toBeInTheDocument()
   })
 })

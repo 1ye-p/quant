@@ -1,9 +1,11 @@
 import { renderWithProviders } from '../../test-utils'
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
+import { useState } from 'react'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppLayout } from '../layout/AppLayout'
 import { CommandPalette } from '../common/CommandPalette'
 import { useThemeStore } from '@/stores/themeStore'
+import { factorsApi, strategiesApi, backtestsApi } from '@/lib/api'
 import i18n from 'i18next'
 import { RECENT_KEY } from '../common/commandPalette/commands'
 
@@ -144,5 +146,41 @@ describe('CommandPalette (Cmd+K)', () => {
     await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
     expect(screen.getByText('top10')).toBeInTheDocument()
     expect(screen.getByText(/run_abc123/)).toBeInTheDocument()
+  })
+
+  it('does not refetch search sources on close→reopen within staleTime (#2a)', async () => {
+    const mocks = [factorsApi.getAvailable, strategiesApi.list, backtestsApi.list] as unknown as Mock[]
+    mocks.forEach(m => m.mockClear())
+
+    // Harness keeps one mount (and thus one QueryClient) across toggles.
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <button onClick={() => setOpen(o => !o)}>toggle</button>
+          <CommandPalette open={open} onClose={() => setOpen(false)} />
+        </>
+      )
+    }
+    renderWithProviders(<Harness />)
+    await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
+    expect(mocks.every(m => m.mock.calls.length === 1)).toBe(true)
+
+    // close → reopen: cached data is served, no second round of fetches
+    fireEvent.click(screen.getByText('toggle'))
+    await waitFor(() => expect(screen.queryByTestId('command-palette')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByText('toggle'))
+    await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
+    expect(mocks.every(m => m.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('re-labels factor entries when the language changes while open (#2b)', async () => {
+    renderWithProviders(<CommandPalette open onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('20日动量')).toBeInTheDocument())
+    await i18n.changeLanguage('en-US')
+    // labels are recomputed reactively — label_en from the same cached data
+    await waitFor(() => expect(screen.getByText('20d Momentum')).toBeInTheDocument())
+    expect(screen.queryByText('20日动量')).not.toBeInTheDocument()
+    await i18n.changeLanguage('zh-CN')
   })
 })

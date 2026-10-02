@@ -3002,6 +3002,7 @@
           "message": "默认仅删除目录行，silver_external_indicators 中的数据行将保留。",
           "purge_label": "同时删除该指标的全部数据行（不可恢复）",
           "purge_hint": "勾选后将连同数据一并清除，历史数据无法找回",
+          "resurrect_notice": "数据行未删除时，该目录行会在下次服务启动迁移时自动重建；如需彻底移除，请勾选下方清除数据。",
           "confirm": "仅删目录",
           "confirm_purge": "连数据一起删除",
           "cancel": "取消"

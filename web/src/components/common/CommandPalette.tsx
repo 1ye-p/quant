@@ -8,8 +8,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { useQuery } from '@tanstack/react-query'
 import { factorsApi, strategiesApi, backtestsApi } from '@/lib/api'
 import type { AvailableFactor } from '@/lib/api/factors'
+import { queryKeys, extendedQueryKeys } from '@/lib/queryKeys'
 import { useThemeStore } from '@/stores/themeStore'
 import {
   buildStaticCommands,
@@ -22,6 +24,11 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 150
 const SEARCH_LIMIT_PER_GROUP = 20
+// Freshness tradeoff (backlog #2a): search sources are reference data that
+// changes on the order of minutes-to-hours, so a 5-minute staleTime avoids
+// refetching all three APIs on every palette open while keeping entries at
+// most ~5 minutes stale — same convention as FactorSelector.
+const PALETTE_STALE_MS = 5 * 60 * 1000
 
 interface CommandPaletteProps {
   open: boolean
@@ -39,7 +46,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
-  const [searchCommands, setSearchCommands] = useState<CommandItem[]>([])
   const [recentIds, setRecentIds] = useState<string[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -74,61 +80,65 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     return () => window.clearTimeout(timer)
   }, [query])
 
-  // ── Lazy-load search sources once per open ────────────────────────────────
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
+  // ── Search sources via react-query (cached across opens, backlog #2a) ─────
+  // enabled: open keeps the fetches lazy (first open triggers them); the
+  // 5-minute staleTime makes close→reopen serve from cache instead of
+  // refetching all three APIs.
+  const { data: factorsData } = useQuery({
+    queryKey: ['factors', 'available'],
+    queryFn: () => factorsApi.getAvailable(),
+    enabled: open,
+    staleTime: PALETTE_STALE_MS,
+  })
+  const { data: strategiesData } = useQuery({
+    queryKey: extendedQueryKeys.strategies.list(),
+    queryFn: () => strategiesApi.list(),
+    enabled: open,
+    staleTime: PALETTE_STALE_MS,
+  })
+  const { data: backtestsData } = useQuery({
+    queryKey: queryKeys.backtests.list({ limit: SEARCH_LIMIT_PER_GROUP }),
+    queryFn: () => backtestsApi.list({ limit: SEARCH_LIMIT_PER_GROUP }),
+    enabled: open,
+    staleTime: PALETTE_STALE_MS,
+  })
 
+  // Labels are (re)computed from the cached data on every render, with
+  // i18n.language in the deps — so switching the language while the palette
+  // is open immediately re-labels factor entries (backlog #2b). Reopening the
+  // palette also re-runs this for the same reason.
+  const searchCommands = useMemo<CommandItem[]>(() => {
     const isZhNow = i18n.language.startsWith('zh')
     const factorLabel = (f: AvailableFactor) => (isZhNow ? f.label_zh || f.name : f.label_en || f.name)
 
-    const factorsPromise = factorsApi.getAvailable()
-      .then(res =>
-        (res.factors ?? []).map<CommandItem>(f => ({
-          id: `factor:${f.name}`,
-          group: 'factors',
-          label: factorLabel(f),
-          keywords: `${f.name} ${f.category}`,
-          icon: '🔬',
-          run: () => navigate('/factors'),
-        })),
-      )
-      .catch(() => [] as CommandItem[])
-
-    const strategiesPromise = strategiesApi.list()
-      .then(res =>
-        (res.items ?? []).slice(0, SEARCH_LIMIT_PER_GROUP).map<CommandItem>(s => ({
-          id: `strategy:${s.strategy_id}`,
-          group: 'strategies',
-          label: s.strategy_id,
-          keywords: 'strategy 策略',
-          icon: '⚙️',
-          run: () => navigate('/strategies'),
-        })),
-      )
-      .catch(() => [] as CommandItem[])
-
-    const backtestsPromise = backtestsApi.list({ limit: SEARCH_LIMIT_PER_GROUP })
-      .then(res =>
-        (res.items ?? []).map<CommandItem>(r => ({
-          id: `backtest:${r.run_id}`,
-          group: 'backtests',
-          label: `${r.strategy_id} · ${r.run_id.slice(0, 10)}`,
-          keywords: `${r.run_id} ${r.strategy_id} backtest 回测`,
-          icon: '📈',
-          run: () => navigate(`/backtests/${r.run_id}`),
-        })),
-      )
-      .catch(() => [] as CommandItem[])
-
-    void Promise.all([factorsPromise, strategiesPromise, backtestsPromise]).then(([f, s, b]) => {
-      if (!cancelled) setSearchCommands([...f, ...s, ...b])
-    })
-
-    return () => { cancelled = true }
-    // i18n.language intentionally read once per open — reopening refreshes it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, navigate])
+    const factorItems = (factorsData?.factors ?? []).map<CommandItem>(f => ({
+      id: `factor:${f.name}`,
+      group: 'factors',
+      label: factorLabel(f),
+      keywords: `${f.name} ${f.category}`,
+      icon: '🔬',
+      run: () => navigate('/factors'),
+    }))
+    const strategyItems = (strategiesData?.items ?? [])
+      .slice(0, SEARCH_LIMIT_PER_GROUP)
+      .map<CommandItem>(s => ({
+        id: `strategy:${s.strategy_id}`,
+        group: 'strategies',
+        label: s.strategy_id,
+        keywords: 'strategy 策略',
+        icon: '⚙️',
+        run: () => navigate('/strategies'),
+      }))
+    const backtestItems = (backtestsData?.items ?? []).map<CommandItem>(r => ({
+      id: `backtest:${r.run_id}`,
+      group: 'backtests',
+      label: `${r.strategy_id} · ${r.run_id.slice(0, 10)}`,
+      keywords: `${r.run_id} ${r.strategy_id} backtest 回测`,
+      icon: '📈',
+      run: () => navigate(`/backtests/${r.run_id}`),
+    }))
+    return [...factorItems, ...strategyItems, ...backtestItems]
+  }, [factorsData, strategiesData, backtestsData, i18n.language, navigate])
 
   // ── Command list (static + search) ────────────────────────────────────────
   const staticCommands = useMemo(

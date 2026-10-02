@@ -220,12 +220,16 @@ class TestDeleteCatalogEntry:
         assert body["purged_data"] is False
         assert _data_count(catalog, "margin_balance") == 3
         assert client.get(f"{_BASE}/margin_balance").status_code == 404
+        # resurrect notice (backlog #10): data rows survive → startup migration
+        # (backfill_catalog_from_data) recreates the catalog row
+        assert "重建" in body["detail"]
 
     def test_delete_purge_true_removes_data(self, client, catalog):
         _seed(catalog)
         resp = client.delete(f"{_BASE}/margin_balance?purge_data=true")
         assert resp.status_code == 200
         assert resp.json()["purged_data"] is True
+        assert "重建" not in resp.json()["detail"]
         assert _data_count(catalog, "margin_balance") == 0
 
     def test_delete_404(self, client):

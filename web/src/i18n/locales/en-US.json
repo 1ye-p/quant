@@ -3002,6 +3002,7 @@
           "message": "By default only the catalog row is deleted; data rows in silver_external_indicators are preserved.",
           "purge_label": "Also delete ALL data rows of this indicator (irreversible)",
           "purge_hint": "Checking this purges the data too — history cannot be recovered",
+          "resurrect_notice": "While data rows are preserved, this catalog row will be automatically recreated by the next server-startup migration. Check the purge option below to remove it for good.",
           "confirm": "Delete catalog only",
           "confirm_purge": "Delete with data",
           "cancel": "Cancel"

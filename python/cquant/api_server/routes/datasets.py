@@ -870,7 +870,9 @@ async def delete_external_indicator_catalog_entry(
         "detail": (
             "目录行已删除，且数据行已一并清除"
             if purge_data
-            else "目录行已删除；数据行保留（如需清除请传 purge_data=true）"
+            else "目录行已删除；数据行保留（如需清除请传 purge_data=true）。"
+            "注意：数据行未删，下次服务启动迁移（backfill_catalog_from_data）"
+            "会自动重建该目录行"
         ),
     }
 

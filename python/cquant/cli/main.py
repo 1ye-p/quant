@@ -50,7 +50,10 @@ def _open_catalog(path: str, command: str) -> Catalog:
                 file=sys.stderr,
             )
             sys.exit(2)
-        print("Read-only mode: only query commands (status/positions/tca) are available.", file=sys.stderr)
+        # Generated from READ_ONLY_COMMANDS so the hint can never drift from
+        # the actual allowlist (open-source backlog #5).
+        ro_commands = "/".join(sorted(READ_ONLY_COMMANDS))
+        print(f"Read-only mode: only query commands ({ro_commands}) are available.", file=sys.stderr)
         return catalog
 
 

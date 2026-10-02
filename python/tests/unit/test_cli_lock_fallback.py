@@ -41,7 +41,7 @@ def test_no_conflict_uses_read_write(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == [{"path": "x.duckdb", "read_only": False}]
 
 
-def test_lock_conflict_read_only_command_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lock_conflict_read_only_command_degrades(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     attempts: list[bool] = []
 
     def fake_catalog(path, read_only: bool = False):
@@ -54,6 +54,12 @@ def test_lock_conflict_read_only_command_degrades(monkeypatch: pytest.MonkeyPatc
     cat = cli_main._open_catalog("x.duckdb", "status")
     assert cat.read_only is True
     assert attempts == [False, True]  # first RW attempt conflicted, RO retry ok
+    # The read-only hint lists every member of READ_ONLY_COMMANDS (backlog #5:
+    # hint is generated from the constant, so it can never drift).
+    err = capsys.readouterr().err
+    assert "Read-only mode" in err
+    for command in cli_main.READ_ONLY_COMMANDS:
+        assert command in err
 
 
 def test_lock_conflict_write_command_exits(monkeypatch: pytest.MonkeyPatch, capsys) -> None:

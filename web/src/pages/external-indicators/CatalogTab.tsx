@@ -142,6 +142,14 @@ function DeleteDialog({
     <Modal title={t('page.datasets.extInd.delete.title', { key: entry.indicator_key })} onClose={onClose}>
       <div className="space-y-3">
         <p className="text-sm text-gray-600">{t('page.datasets.extInd.delete.message')}</p>
+        {/* Resurrect notice (backlog #10): matches the backend DELETE detail —
+            with data rows preserved, the next server-startup migration
+            (backfill_catalog_from_data) recreates the catalog row. */}
+        {!purge && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+            {t('page.datasets.extInd.delete.resurrect_notice')}
+          </p>
+        )}
         <label className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer text-sm ${purge ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}>
           <input
             type="checkbox"

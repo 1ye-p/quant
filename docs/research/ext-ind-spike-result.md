@@ -113,3 +113,55 @@ conda run -n cQuanty python scripts/spike/ext_ind_spike.py
 结论：enable→回填→手动增量→管理页可见全链真实拉通，验收第 2 条由 partial 补齐为完成。
 
 备注（非本验收缺陷）：tmp DuckDB 在 `conda run` 硬退出下 WAL 未 checkpoint，进程内断言全部通过；跨进程复验需同进程执行（脚本 `/tmp/ext_ind_pullthrough.py` 模式）。
+
+---
+
+## 附录二：L2 custom_http 真实公开 API 全流程（P3 验收）
+
+> P3 最终评审 FIX FIRST Item 1（验收 #2）：真实公开 JSON API 全流程
+> 配置 → Test 样例 → 保存 → 手动刷新 → 数据可见 → DSL regime 引用跑通。
+> 执行日 2026-10-02；单进程 TestClient（沿附录一模式，tmp DuckDB
+> `/tmp/ext_ind_p3_catalog.duckdb`，不碰真实 `data/catalog.duckdb`）；
+> 脚本 `/tmp/ext_ind_p3_realapi.py`，结果 JSON `/tmp/ext_ind_p3_result.json`。
+
+### API 选型
+
+| 候选 | 结论 |
+|------|------|
+| **NBP 波兰央行 Table A（选用）** | `https://api.nbp.pl/api/exchangerates/rates/a/usd/last/30/?format=json` — 免 key、HTTPS、返回 `rates[*]` 数组且每条记录自带 `effectiveDate`（日期）与 `mid`（数值），与 `ExtractionSpec`（records_path + field_map 需 record 内含 trade_date/value）天然匹配 |
+| open.er-api.com / Frankfurter | `rates` 为扁平 `{币种: 数值}` 字典，记录内无日期字段，field_map 无法映射 trade_date（结构不匹配，非可达性问题） |
+
+### CustomHTTPConfig（关键差异：`date_param_style='none'`，记录自带日期）
+
+```json
+{
+  "method": "GET",
+  "url_template": "https://api.nbp.pl/api/exchangerates/rates/a/usd/last/30/?format=json",
+  "date_param_style": "none",
+  "extraction": {
+    "type": "jsonpath",
+    "records_path": "$.rates[*]",
+    "field_map": {"trade_date": "effectiveDate", "value": "mid"}
+  }
+}
+```
+
+目录行：`indicator_key='nbp_usd_pln'`，`frequency='daily'`，
+`available_date_rule='B'`（次日可查），`backfill_start='2026-08-01'`。
+
+### 各步输出 / 耗时 / 行数
+
+| 步骤 | 端点 | 结果 | 耗时 |
+|------|------|------|------|
+| 前置 | — | tmp catalog 播种 `silver_prices_1d` 51 个交易日（锚定日 2026-10-02，兼作覆盖检查交易日基准） | 1.07s |
+| 1. Test 样例 | `POST /external-indicators/test` | 200；`rows_parsed=30`，`field_map_hit=true`，样例首行 `{trade_date: 2026-08-21, value: 3.6839}`（真实 guarded_fetch 拉取+解析，不写库） | 0.83s |
+| 2. 保存 | `POST /external-indicators/catalog` | 201；`source_type='custom_http'`，`enabled=true` | 0.05s |
+| 3. 手动刷新 | `POST /external-indicators/refresh {keys:[nbp_usd_pln]}` | 200；`status='ok'`，`source='custom_http:nbp_table_a_usd'`，`rows_fetched=30 / rows_upserted=30`，窗口 `[2026-08-01, 2026-10-02]`（首刷无数据自动回填窗口） | 0.89s |
+| 4. 数据可见 | `GET /catalog/{key}` + 列表端点 | 详情 200（`last_status='ok'`，preview 30 行）；列表 `latest_trade_date=2026-10-01`，`stale=false`；库内 30 行，`[2026-08-21, 2026-10-01]`，rule B 下 `min(available_date)=2026-08-24` | 0.04s |
+| 5. DSL regime 引用 | `check_regime_indicator_coverage`（等价回测创建预检路径） | `regime.indicators = {"usdpln": "nbp_usd_pln"}`，区间取首个可见日..最新数据日 `[2026-08-24, 2026-10-01]` → **warnings = []**（覆盖完整时为空）；对照：起点提前到首个数据日 2026-08-21 → 命中 `首个可见日 2026-08-24 晚于区间起点` warning（语义非空验证） | 0.01s |
+
+注：单 key 详情端点不回 `latest_trade_date`（新鲜度在列表层实时计算），故第 4 步以列表端点补证。
+
+### spec §13 偏差记录
+
+spec（`docs/superpowers/specs/2026-09-30-external-indicator-automation-design.md`，用户未跟踪文件，原文不编辑）§13 表述为「DB 不存明文密钥」；P3 实现为**明文可入库 + 保存时密钥启发式告警（`_warn_on_plaintext_secrets`，仅 warn 不拒绝）+ 回显四面脱敏（`redact_config`，GET/PATCH/CREATE 回显统一过）+ `${ENV_VAR}` 引用渲染为推荐路径（入库存引用原文，仅请求构建时在 guard 层渲染）**——plan Task 1 已明示该决策。本注记为 committed 事实记录，spec 原文由维护者自行同步。

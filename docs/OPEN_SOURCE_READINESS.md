@@ -56,6 +56,7 @@
 | 7 | 行为准则缺失 | 本次核对 | 新建 CODE_OF_CONDUCT.md 并在 CONTRIBUTING 链接 |
 | 8 | 双引擎 parity 形式化 | 设计 §5 #1 | 主路径为向量化引擎；开源后 revisit Rust 事件引擎 parity 测试与编译体验 |
 | 9 | 数据广度缺口 | 设计 §5 #7 | 分钟/tick/期货/期权/两融/北向/龙虎榜/宏观；开源后按社区需求排期 |
+| 10 | catalog-only DELETE 的目录行会被下次启动迁移复活 | ext-ind P1 review | backfill 走 INSERT OR IGNORE，被删目录行（未 purge_data 的 key）会在下次启动迁移时复活——行为与验收语义一致但用户无感知；建议 DELETE 响应提示复活语义或引入 disabled 软删概念 |
 
 ## 六、结论
 

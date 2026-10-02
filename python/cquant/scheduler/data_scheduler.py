@@ -12,6 +12,7 @@ Runs recurring jobs (all times CST):
   9.  daily_prices             — daily at 18:00 (post-close price ingest)
   10. daily_valuation          — daily at 18:30 (post-close valuation update)
   11. quarterly_fundamentals   — daily at 19:00 (end-of-day fundamentals refresh)
+  12. ext_indicator_refresh    — daily at 18:15 (builtin external indicators)
 """
 
 from __future__ import annotations
@@ -351,6 +352,19 @@ def _notify_needs_review(catalog: Any, strategy_ids: list[str]) -> None:
             logger.warning("Notification via %s failed: %s", ch.channel_type, exc)
 
 
+def _job_ext_indicator_refresh(catalog: Any) -> None:
+    """Refresh builtin external indicators via adapters (akshare/tushare)."""
+    from cquant.datahub.pipelines.indicator_sources.refresh import (
+        run_external_indicator_refresh,
+    )
+
+    summary = run_external_indicator_refresh(catalog, trigger="scheduled")
+    logger.info(
+        "DataScheduler: ext indicator refresh completed — %d ok / %d failed",
+        summary.ok_count, summary.error_count,
+    )
+
+
 def _job_weekly_retrain(catalog: Any) -> None:
     """Weekly retrain: run the full automated ML pipeline."""
     logger.info("DataScheduler: weekly retrain started")
@@ -495,6 +509,16 @@ class DataScheduler:
             replace_existing=True,
         )
 
+        # 12. External indicator refresh — daily at 18:15 (clear of the
+        #     16:35-18:05 data-pipeline window, before 18:30 valuation)
+        sched.add_job(
+            self._run_ext_indicator_refresh,
+            CronTrigger(hour=18, minute=15, timezone=self._tz),
+            id="ext_indicator_refresh",
+            name="External Indicator Refresh",
+            replace_existing=True,
+        )
+
         self._scheduler = sched
         self._running = True
         logger.info("DataScheduler started with %d jobs (tz=%s)", len(sched.get_jobs()), self._tz)
@@ -548,6 +572,7 @@ class DataScheduler:
             "daily-valuation": self._run_daily_valuation,
             "quarterly-fundamentals": self._run_quarterly_fundamentals,
             "strategy-optimization": self._run_strategy_optimization,
+            "ext-ind-refresh": self._run_ext_indicator_refresh,
         }
         fn = dispatch.get(task_name)
         if fn is None:
@@ -669,6 +694,15 @@ class DataScheduler:
         except Exception as exc:
             logger.error("Strategy optimization failed after retries: %s", exc)
             self._record_run("strategy_optimization", "failure")
+
+    def _run_ext_indicator_refresh(self) -> None:
+        logger.info("Running external indicator refresh ...")
+        try:
+            _with_retry(_job_ext_indicator_refresh, self._catalog)
+            self._record_run("ext_indicator_refresh")
+        except Exception as exc:
+            logger.error("External indicator refresh failed after retries: %s", exc)
+            self._record_run("ext_indicator_refresh", "failure")
 
     def _record_run(self, job_id: str, status: str = "success") -> None:
         """Persist last-run metadata into the catalog (best-effort)."""

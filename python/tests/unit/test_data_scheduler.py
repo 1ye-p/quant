@@ -119,6 +119,113 @@ class TestDataScheduler:
 # Job implementations — integration-style tests with mocked dependencies
 # ---------------------------------------------------------------------------
 
+class TestExtIndicatorRefreshTask:
+    """P2-5: 'ext-ind-refresh' task dispatch + job wiring (dual registration, CLI side)."""
+
+    @patch("cquant.scheduler.data_scheduler._job_ext_indicator_refresh")
+    def test_run_task_dispatches_ext_ind_refresh(self, mock_refresh):
+        catalog = self._make_catalog()
+        sched = DataScheduler(catalog)
+        sched.run_task("ext-ind-refresh")
+        mock_refresh.assert_called_once_with(catalog)
+
+    @patch("cquant.scheduler.data_scheduler._job_ext_indicator_refresh")
+    def test_run_task_failure_records_run(self, mock_refresh):
+        catalog = self._make_catalog()
+        mock_refresh.side_effect = ValueError("boom")
+        sched = DataScheduler(catalog)
+        sched.run_task("ext-ind-refresh")  # must not raise (pattern of other runners)
+        runs = [c.args[1] for c in catalog.execute.call_args_list
+                if len(c.args) > 1 and isinstance(c.args[1], list)]
+        assert any(r[0] == "ext_indicator_refresh" and r[2] == "failure" for r in runs)
+
+    @patch("cquant.scheduler.data_scheduler._job_ext_indicator_refresh")
+    def test_run_task_success_records_run(self, mock_refresh):
+        catalog = self._make_catalog()
+        sched = DataScheduler(catalog)
+        sched.run_task("ext-ind-refresh")
+        runs = [c.args[1] for c in catalog.execute.call_args_list
+                if len(c.args) > 1 and isinstance(c.args[1], list)]
+        assert any(r[0] == "ext_indicator_refresh" and r[2] == "success" for r in runs)
+
+    def _make_catalog(self) -> MagicMock:
+        catalog = MagicMock()
+        catalog.query.return_value = MagicMock(is_empty=MagicMock(return_value=True))
+        return catalog
+
+
+class TestJobExtIndicatorRefresh:
+    @patch(
+        "cquant.datahub.pipelines.indicator_sources.refresh.run_external_indicator_refresh"
+    )
+    def test_job_calls_refresh_with_scheduled_trigger(self, mock_refresh):
+        from cquant.scheduler.data_scheduler import _job_ext_indicator_refresh
+
+        catalog = MagicMock()
+        _job_ext_indicator_refresh(catalog)
+        mock_refresh.assert_called_once_with(catalog, trigger="scheduled")
+
+
+class TestApiServerSchedulerRegistration:
+    """P2-5: api_server resident scheduler registers the 18:15 refresh job.
+
+    APScheduler may be absent in the test env — fake the modules via sys.modules
+    (mirrors the ImportError fallback inside start_data_scheduler).
+    """
+
+    def test_start_data_scheduler_registers_ext_indicator_refresh(self, monkeypatch):
+        import sys
+        import types
+
+        added_jobs: list[dict] = []
+        trigger_calls: list[dict] = []
+
+        class FakeAsyncIOScheduler:
+            def __init__(self, timezone=None):
+                self.timezone = timezone
+
+            def add_job(self, fn, trigger=None, **kwargs):
+                added_jobs.append({"fn": fn, "trigger": trigger, **kwargs})
+
+            def start(self):
+                return None
+
+            def get_job(self, job_id):
+                return None
+
+        class FakeCronTrigger:
+            def __init__(self, **kwargs):
+                trigger_calls.append(kwargs)
+
+        mods = {
+            "apscheduler": types.ModuleType("apscheduler"),
+            "apscheduler.schedulers": types.ModuleType("apscheduler.schedulers"),
+            "apscheduler.schedulers.asyncio": types.ModuleType(
+                "apscheduler.schedulers.asyncio"
+            ),
+            "apscheduler.triggers": types.ModuleType("apscheduler.triggers"),
+            "apscheduler.triggers.cron": types.ModuleType("apscheduler.triggers.cron"),
+        }
+        mods["apscheduler.schedulers.asyncio"].AsyncIOScheduler = FakeAsyncIOScheduler
+        mods["apscheduler.triggers.cron"].CronTrigger = FakeCronTrigger
+        for name, mod in mods.items():
+            monkeypatch.setitem(sys.modules, name, mod)
+
+        from cquant.api_server import data_scheduler as api_ds
+
+        monkeypatch.setattr(api_ds, "_SCHEDULER_INSTANCE", None)
+        catalog = MagicMock()
+        api_ds.start_data_scheduler(catalog)
+
+        assert {"hour": 18, "minute": 15, "timezone": "Asia/Shanghai"} in trigger_calls
+        ids = [j.get("id") for j in added_jobs]
+        assert "ext_indicator_refresh" in ids
+        for j in added_jobs:
+            if j.get("id") == "ext_indicator_refresh":
+                assert j.get("args") == [catalog]
+                assert j.get("replace_existing") is True
+
+
 class TestJobPriceIngest:
     def test_skips_when_up_to_date(self, caplog):
         from cquant.scheduler.data_scheduler import _job_price_ingest

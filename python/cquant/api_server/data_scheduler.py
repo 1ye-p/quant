@@ -165,8 +165,17 @@ def run_incremental_ingest(catalog) -> None:
         _SCHEDULER_STATE["last_error"] = repr(e)[:200]
 
 
+def run_ext_indicator_refresh_job(catalog) -> None:
+    """刷新 builtin 外部指标（调度触发，trigger='scheduled'）。"""
+    from cquant.datahub.pipelines.indicator_sources.refresh import (
+        run_external_indicator_refresh,
+    )
+
+    run_external_indicator_refresh(catalog, trigger="scheduled")
+
+
 def start_data_scheduler(catalog) -> Any:
-    """启动 APScheduler，注册每日 16:35 的摄取任务。"""
+    """启动 APScheduler，注册每日 16:35 的摄取任务与 18:15 的外部指标刷新任务。"""
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -179,6 +188,14 @@ def start_data_scheduler(catalog) -> Any:
         run_incremental_ingest,
         CronTrigger(hour=16, minute=35, timezone="Asia/Shanghai"),
         id="daily_ingest",
+        args=[catalog],
+        replace_existing=True,
+    )
+    # 外部指标刷新 — 每日 18:15（错开 16:35/17:00/17:30/18:00/18:05 既有 job）
+    scheduler.add_job(
+        run_ext_indicator_refresh_job,
+        CronTrigger(hour=18, minute=15, timezone="Asia/Shanghai"),
+        id="ext_indicator_refresh",
         args=[catalog],
         replace_existing=True,
     )

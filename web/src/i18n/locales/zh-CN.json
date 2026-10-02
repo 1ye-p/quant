@@ -1141,6 +1141,9 @@
         "no_completed_experiments": "暂无已完成实验，请先在\"机器学习\"页面训练模型",
         "no_benchmark": "未设置基准，相对指标（Alpha/Beta/IR/TE）将为空"
       },
+      "precheck_warnings": {
+        "title": "指标覆盖预检提示"
+      },
       "btn": {
         "run": "执行回测",
         "running": "执行中...",

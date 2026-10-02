@@ -35,6 +35,8 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
   const [benchmarkId, setBenchmarkId] = useState('SSE:000300')
   const [scoringRunId, setScoringRunId] = useState('')
   const [scoringWarning, setScoringWarning] = useState('')
+  // P3-7: 非阻断预检警告（后端拼好的中文句子，原样展示）
+  const [precheckWarnings, setPrecheckWarnings] = useState<string[]>([])
   const [mlModelVersion, setMlModelVersion] = useState(
     (parsed as Record<string, unknown>).model_version as string
     ?? (parsed as Record<string, unknown>).model_id as string
@@ -134,6 +136,7 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
       if (data.warning) {
         setScoringWarning(data.warning as string)
       }
+      setPrecheckWarnings(data.warnings ?? [])
       queryClient.invalidateQueries({ queryKey: queryKeys.backtests.all })
       if (data.job_id) {
         setJobId(data.job_id)
@@ -479,6 +482,22 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
           {scoringWarning && (
             <div className="w-full text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
               ⚠ {scoringWarning}
+            </div>
+          )}
+          {precheckWarnings.length > 0 && (
+            <div
+              className="w-full text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded px-3 py-2"
+              data-testid="precheck-warnings"
+              role="alert"
+            >
+              <p className="font-medium mb-1">
+                {t('component.backtest_run_modal.precheck_warnings.title')}
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {precheckWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
             </div>
           )}
           {jobId && jobStatus?.status === 'running' && (

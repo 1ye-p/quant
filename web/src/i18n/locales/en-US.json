@@ -1141,6 +1141,9 @@
         "no_completed_experiments": "No completed experiments yet. Please train a model on the \"Machine Learning\" page first.",
         "no_benchmark": "No benchmark selected — relative metrics (Alpha/Beta/IR/TE) will be empty"
       },
+      "precheck_warnings": {
+        "title": "Indicator coverage precheck notices"
+      },
       "btn": {
         "run": "Run Backtest",
         "running": "Running...",

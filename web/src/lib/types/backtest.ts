@@ -138,6 +138,8 @@ export const BacktestResultSchema = z.object({
   strategy_id: z.string(),
   status: z.string(),
   warning: z.string().optional(),
+  // P3-7: precheck warnings (regime indicator coverage etc.), pre-joined Chinese sentences from backend
+  warnings: z.array(z.string()).optional(),
 })
 
 export type BacktestResult = z.infer<typeof BacktestResultSchema>

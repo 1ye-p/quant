@@ -165,6 +165,82 @@ export const datasetsApi = {
       headers: {},
       ...reqConfig,
     }),
+
+  // ── External indicator catalog (P1-5 CRUD) ──────────────────────────────
+
+  listExtIndCatalog: (config?: RequestConfig) =>
+    api.get<{ items: ExtIndCatalogEntry[]; total: number }>(
+      '/datasets/external-indicators/catalog',
+      config,
+    ),
+
+  getExtIndCatalog: (key: string, config?: RequestConfig) =>
+    api.get<ExtIndCatalogDetail>(
+      `/datasets/external-indicators/catalog/${encodeURIComponent(key)}`,
+      config,
+    ),
+
+  patchExtIndCatalog: (key: string, body: ExtIndCatalogPatch, config?: RequestConfig) =>
+    api.patch<ExtIndCatalogDetail>(
+      `/datasets/external-indicators/catalog/${encodeURIComponent(key)}`,
+      body,
+      config,
+    ),
+
+  deleteExtIndCatalog: (key: string, purgeData = false, config?: RequestConfig) =>
+    api.delete<ExtIndDeleteResult>(
+      `/datasets/external-indicators/catalog/${encodeURIComponent(key)}?purge_data=${purgeData}`,
+      config,
+    ),
+}
+
+// ── External indicator catalog types ────────────────────────────────────────
+
+/** One catalog row as returned by GET /external-indicators/catalog (list or detail).
+ *  `latest_trade_date` / `stale` are live-freshness fields computed server-side. */
+export interface ExtIndCatalogEntry {
+  indicator_key: string
+  display_name: string
+  unit: string | null
+  description: string | null
+  source_type: string
+  source_name: string | null
+  pinned_source: string | null
+  source_config: string | null
+  available_date_rule: 'A' | 'B'
+  frequency: 'daily' | 'weekly'
+  backfill_start: string | null
+  enabled: boolean
+  last_refresh_at: string | null
+  last_status: string | null
+  last_error: string | null
+  updated_at: string | null
+  latest_trade_date: string | null
+  stale: boolean
+}
+
+/** Detail response = catalog row + tail preview (last 30 data rows, ascending). */
+export interface ExtIndCatalogDetail extends ExtIndCatalogEntry {
+  preview: { trade_date: string; value: number | null; available_date: string }[]
+}
+
+/** PATCH whitelist (P1). pinned_source / source_config are P2/P3-reserved and
+ *  rejected by the backend — never send them from the client. */
+export interface ExtIndCatalogPatch {
+  display_name?: string
+  unit?: string
+  description?: string
+  frequency?: 'daily' | 'weekly'
+  enabled?: boolean
+  available_date_rule?: 'A' | 'B'
+  backfill_start?: string
+}
+
+/** DELETE response. `purged_data` echoes the purge_data query param. */
+export interface ExtIndDeleteResult {
+  deleted: string
+  purged_data: boolean
+  detail: string
 }
 
 

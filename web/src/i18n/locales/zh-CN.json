@@ -2944,6 +2944,75 @@
           "deduped": "去重/更新",
           "skipped": "跳过"
         }
+      },
+      "extInd": {
+        "title": "外部指标管理",
+        "subtitle": "管理外部指标目录：查看新鲜度、编辑元数据、CSV 导入与删除",
+        "tab": {
+          "catalog": "指标列表",
+          "import": "CSV 导入",
+          "builtin": "内置目录",
+          "custom": "自定义源"
+        },
+        "catalog": {
+          "total": "共 {{count}} 个指标",
+          "refresh": "刷新",
+          "empty": "暂无外部指标，请先在「CSV 导入」页签导入"
+        },
+        "column": {
+          "key": "指标键",
+          "displayName": "显示名",
+          "type": "类型",
+          "source": "来源",
+          "frequency": "频率",
+          "latestDate": "最新数据日",
+          "status": "状态",
+          "lastRefresh": "上次刷新",
+          "actions": "操作"
+        },
+        "stale": "过期",
+        "stale_hint": "该指标数据落后市场基准日超过频率容忍度（daily 3 个交易日 / weekly 10 个交易日）",
+        "disabled": "已停用",
+        "action": {
+          "edit": "编辑",
+          "delete": "删除"
+        },
+        "edit": {
+          "title": "编辑指标：{{key}}",
+          "display_name": "显示名",
+          "unit": "单位",
+          "description": "描述",
+          "frequency": "频率",
+          "daily": "日频",
+          "weekly": "周频",
+          "available_date_rule": "可查日规则",
+          "rule_a": "A：当天盘后可查",
+          "rule_b": "B：次日可查（保守）",
+          "backfill_start": "回补起始日",
+          "enabled": "启用该指标",
+          "save": "保存",
+          "cancel": "取消"
+        },
+        "delete": {
+          "title": "删除指标：{{key}}",
+          "message": "默认仅删除目录行，silver_external_indicators 中的数据行将保留。",
+          "purge_label": "同时删除该指标的全部数据行（不可恢复）",
+          "purge_hint": "勾选后将连同数据一并清除，历史数据无法找回",
+          "confirm": "仅删目录",
+          "confirm_purge": "连数据一起删除",
+          "cancel": "取消"
+        },
+        "toast": {
+          "updated": "指标已更新",
+          "update_failed": "更新失败",
+          "deleted": "目录行已删除（数据保留）",
+          "deleted_purged": "目录行与数据已一并删除",
+          "delete_failed": "删除失败"
+        },
+        "placeholder": {
+          "builtin": "内置目录即将上线（P2）",
+          "custom": "自定义数据源即将上线（P3）"
+        }
       }
     },
     "backtests_list": {

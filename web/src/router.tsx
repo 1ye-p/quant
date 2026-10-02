@@ -14,7 +14,7 @@ const OverviewPage  = named(() => import('@/pages/OverviewPage'), 'OverviewPage'
 const WelcomePage   = named(() => import('@/pages/WelcomePage'), 'WelcomePage')
 const DatasetsPage  = named(() => import('@/pages/DatasetsPage'), 'DatasetsPage')
 const DataBrowserPage = named(() => import('@/pages/DataBrowserPage'), 'DataBrowserPage')
-const ExternalIndicatorsImportPage = named(() => import('@/pages/ExternalIndicatorsImport'), 'ExternalIndicatorsImportPage')
+const ExternalIndicatorsPage = named(() => import('@/pages/ExternalIndicatorsPage'), 'ExternalIndicatorsPage')
 const BacktestsListPage = named(() => import('@/pages/BacktestsListPage'), 'BacktestsListPage')
 const BacktestDetailPage = named(() => import('@/pages/BacktestDetailPage'), 'BacktestDetailPage')
 const BacktestComparePage = named(() => import('@/pages/BacktestComparePage'), 'BacktestComparePage')
@@ -98,7 +98,7 @@ export const router = createBrowserRouter([
       { path: 'optimize',   element: <OptimizePage /> },
       { path: 'risk',       element: <RiskPage /> },
       { path: 'scoring',    element: <ScoringPage /> },
-      { path: 'datasets/external-indicators', element: <ExternalIndicatorsImportPage /> },
+      { path: 'datasets/external-indicators', element: <ExternalIndicatorsPage /> },
       { path: 'datasets',   element: <DatasetsPage /> },
       { path: 'data-browser', element: <DataBrowserPage /> },
       { path: 'knowledge',  element: <KnowledgePage /> },

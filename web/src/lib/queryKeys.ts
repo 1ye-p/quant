@@ -6,6 +6,7 @@ export const queryKeys = {
     list: (limit: number) => ['datasets', 'list', limit] as const,
     detail: (id: string) => ['datasets', id] as const,
     compare: (a: string, b: string) => ['datasets', 'compare', a, b] as const,
+    extIndCatalog: ['datasets', 'ext-ind-catalog'] as const,
   },
   backtests: {
     all: ['backtests'] as const,

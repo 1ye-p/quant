@@ -2944,6 +2944,75 @@
           "deduped": "Deduped/updated",
           "skipped": "Skipped"
         }
+      },
+      "extInd": {
+        "title": "External Indicators",
+        "subtitle": "Manage the external indicator catalog: freshness, metadata edits, CSV import and deletion",
+        "tab": {
+          "catalog": "Indicators",
+          "import": "CSV Import",
+          "builtin": "Built-in Catalog",
+          "custom": "Custom Sources"
+        },
+        "catalog": {
+          "total": "{{count}} indicator(s)",
+          "refresh": "Refresh",
+          "empty": "No external indicators yet — import one in the CSV Import tab"
+        },
+        "column": {
+          "key": "Key",
+          "displayName": "Display Name",
+          "type": "Type",
+          "source": "Source",
+          "frequency": "Frequency",
+          "latestDate": "Latest Data Date",
+          "status": "Status",
+          "lastRefresh": "Last Refresh",
+          "actions": "Actions"
+        },
+        "stale": "Stale",
+        "stale_hint": "This indicator's data lags the market anchor date beyond its frequency tolerance (daily: 3 / weekly: 10 trading days)",
+        "disabled": "Disabled",
+        "action": {
+          "edit": "Edit",
+          "delete": "Delete"
+        },
+        "edit": {
+          "title": "Edit indicator: {{key}}",
+          "display_name": "Display name",
+          "unit": "Unit",
+          "description": "Description",
+          "frequency": "Frequency",
+          "daily": "Daily",
+          "weekly": "Weekly",
+          "available_date_rule": "Availability rule",
+          "rule_a": "A: same day after close",
+          "rule_b": "B: next trading day (conservative)",
+          "backfill_start": "Backfill start",
+          "enabled": "Enabled",
+          "save": "Save",
+          "cancel": "Cancel"
+        },
+        "delete": {
+          "title": "Delete indicator: {{key}}",
+          "message": "By default only the catalog row is deleted; data rows in silver_external_indicators are preserved.",
+          "purge_label": "Also delete ALL data rows of this indicator (irreversible)",
+          "purge_hint": "Checking this purges the data too — history cannot be recovered",
+          "confirm": "Delete catalog only",
+          "confirm_purge": "Delete with data",
+          "cancel": "Cancel"
+        },
+        "toast": {
+          "updated": "Indicator updated",
+          "update_failed": "Update failed",
+          "deleted": "Catalog row deleted (data preserved)",
+          "deleted_purged": "Catalog row and data purged",
+          "delete_failed": "Delete failed"
+        },
+        "placeholder": {
+          "builtin": "Built-in catalog coming soon (P2)",
+          "custom": "Custom sources coming soon (P3)"
+        }
       }
     },
     "backtests_list": {

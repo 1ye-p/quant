@@ -14,7 +14,16 @@ import { datasetsApi, type ExtIndImportReport } from '@/lib/api'
 
 type PitRule = 'A' | 'B' | 'C'
 
-export function ExternalIndicatorsImportPage() {
+interface Props {
+  /** When embedded as a tab of ExternalIndicatorsPage, hide the page-level
+   *  title/back-link header (import logic below is untouched). */
+  embedded?: boolean
+  /** Notifies the host page after a successful import (e.g. to invalidate the
+   *  catalog list query). */
+  onImported?: () => void
+}
+
+export function ExternalIndicatorsImportPage({ embedded = false, onImported }: Props = {}) {
   const { t } = useTranslation()
   const fileRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -40,6 +49,7 @@ export function ExternalIndicatorsImportPage() {
         // C ("not sure") -> conservative B: at most one day of staleness, never look-ahead
         available_date_rule: args.rule === 'A' ? 'A' : 'B',
       }),
+    onSuccess: () => onImported?.(),
   })
 
   const columns = preview.data?.columns ?? []
@@ -76,13 +86,15 @@ export function ExternalIndicatorsImportPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="page-title">{t('page.datasets.ext_ind.title')}</h1>
-          <p className="page-subtitle">{t('page.datasets.ext_ind.subtitle')}</p>
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="page-title">{t('page.datasets.ext_ind.title')}</h1>
+            <p className="page-subtitle">{t('page.datasets.ext_ind.subtitle')}</p>
+          </div>
+          <Link to="/datasets" className="btn-secondary text-xs">{t('page.datasets.ext_ind.back')}</Link>
         </div>
-        <Link to="/datasets" className="btn-secondary text-xs">{t('page.datasets.ext_ind.back')}</Link>
-      </div>
+      )}
 
       {/* Step 1: file */}
       <div className="card p-4 space-y-3">

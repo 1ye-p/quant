@@ -68,7 +68,16 @@ export type {
 } from './optimize'
 
 export { datasetsApi } from './datasets'
-export type { DatasetVersion } from './datasets'
+export type {
+  DatasetVersion,
+  ExtIndPreview,
+  ExtIndImportReport,
+  ExtIndImportConfig,
+  ExtIndCatalogEntry,
+  ExtIndCatalogDetail,
+  ExtIndCatalogPatch,
+  ExtIndDeleteResult,
+} from './datasets'
 
 export { dashboardApi } from './dashboard'
 

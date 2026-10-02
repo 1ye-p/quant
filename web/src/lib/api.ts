@@ -17,7 +17,16 @@ export {
 // ── Domain APIs ────────────────────────────────────────────────────────────
 
 export { datasetsApi } from './api/datasets'
-export type { DatasetVersion, ExtIndPreview, ExtIndImportReport, ExtIndImportConfig } from './api/datasets'
+export type {
+  DatasetVersion,
+  ExtIndPreview,
+  ExtIndImportReport,
+  ExtIndImportConfig,
+  ExtIndCatalogEntry,
+  ExtIndCatalogDetail,
+  ExtIndCatalogPatch,
+  ExtIndDeleteResult,
+} from './api/datasets'
 
 export { dashboardApi } from './api/dashboard'
 

@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 MAX_REDIRECTS = 3
 MAX_RENDERED_DATES = 400
 
+# Credential headers stripped when a redirect crosses to a different host
+# (mirrors httpx auto-follow behavior, which the manual redirect loop would
+# otherwise bypass). Whitelist-style: everything else is forwarded.
+SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "x-api-key"})
+
 _STAGES = (
     "ssrf_blocked",
     "timeout",
@@ -192,13 +197,32 @@ def _fetch_and_read(
     streamed body → parsed JSON. Returns the parsed JSON object."""
     current_url = url
     current_params = params
+    prev_netloc: str | None = None
     for hop in range(MAX_REDIRECTS + 1):
         validate_url(current_url, allow_insecure=cfg.allow_insecure_http)
+
+        netloc = urlsplit(current_url).netloc
+        if prev_netloc is not None and netloc != prev_netloc:
+            # Cross-host redirect: never re-send credential headers to the
+            # new origin (Authorization may carry a ${ENV_VAR}-rendered token).
+            headers = {
+                k: v
+                for k, v in cfg.headers.items()
+                if k.lower() not in SENSITIVE_HEADERS
+            }
+            logger.debug(
+                "guarded_fetch cross-host redirect %s -> %s: stripped "
+                "credential headers",
+                prev_netloc,
+                netloc,
+            )
+        else:
+            headers = cfg.headers
 
         request = client.build_request(
             cfg.method,
             current_url,
-            headers=cfg.headers,
+            headers=headers,
             params=current_params,
         )
         try:
@@ -231,6 +255,7 @@ def _fetch_and_read(
                         f"redirect target {next_url} rejected: {exc}",
                     ) from exc
                 logger.debug("guarded_fetch redirect hop %d: %s", hop + 1, next_url)
+                prev_netloc = netloc
                 current_url = next_url
                 current_params = None  # query is carried in the Location URL
                 continue

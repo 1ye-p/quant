@@ -53,6 +53,10 @@ DNS: dict[str, list[str]] = {
     "192.168.0.1": ["192.168.0.1"],
     "169.254.169.254": ["169.254.169.254"],
     "8.8.8.8": ["8.8.8.8"],
+    # IP-literal encodings (getaddrinfo resolves these forms to loopback)
+    "2130706433": ["127.0.0.1"],
+    "0x7f000001": ["127.0.0.1"],
+    "::1": ["::1"],
 }
 
 
@@ -171,6 +175,19 @@ class TestValidateUrlSSRF:
         # DNS rebinding mitigation: ANY private record → reject
         with pytest.raises(GuardError) as ei:
             validate_url("https://multi-evil.example.com/x")
+        assert ei.value.stage == "ssrf_blocked"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://2130706433/",  # decimal IPv4 encoding of 127.0.0.1
+            "http://0x7f000001/",  # hex IPv4 encoding of 127.0.0.1
+            "https://[::1]/",  # IPv6 loopback literal
+        ],
+    )
+    def test_ip_encoding_variants_rejected(self, url):
+        with pytest.raises(GuardError) as ei:
+            validate_url(url, allow_insecure=True)
         assert ei.value.stage == "ssrf_blocked"
 
 
@@ -298,6 +315,50 @@ class TestGuardedFetchRedirects:
         with pytest.raises(GuardError) as ei:
             guarded_fetch(_cfg(), _dates(1), _transport=httpx.MockTransport(handler))
         assert ei.value.stage == "redirect_blocked"
+
+    def test_cross_host_redirect_strips_credential_headers(self):
+        requests_by_host: dict[str, httpx.Request] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests_by_host[request.url.host] = request
+            if request.url.host == "public.example.com":
+                return httpx.Response(
+                    302, headers={"Location": "https://public2.example.com/final"}
+                )
+            return _json_response([{"date": "20260101", "close": 1}])
+
+        cfg = _cfg(
+            headers={
+                "Authorization": "Bearer ${TEST_TOKEN}",
+                "Cookie": "session=abc",
+                "X-Api-Key": "secret-key",
+                "X-Custom": "keep-me",
+            }
+        )
+        rows = guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        assert rows[0]["value"] == 1
+
+        second = requests_by_host["public2.example.com"]
+        assert "authorization" not in second.headers
+        assert "cookie" not in second.headers
+        assert "x-api-key" not in second.headers
+        assert second.headers.get("x-custom") == "keep-me"
+
+    def test_same_host_redirect_keeps_credential_headers(self):
+        requests_by_path: dict[str, httpx.Request] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests_by_path[request.url.path] = request
+            if request.url.path != "/final":
+                return httpx.Response(
+                    302, headers={"Location": "https://public.example.com/final"}
+                )
+            return _json_response([{"date": "20260101", "close": 2}])
+
+        cfg = _cfg(headers={"Authorization": "Bearer ${TEST_TOKEN}"})
+        rows = guarded_fetch(cfg, _dates(1), _transport=httpx.MockTransport(handler))
+        assert rows[0]["value"] == 2
+        assert requests_by_path["/final"].headers.get("authorization") is not None
 
 
 class TestGuardedFetchSizeAndTimeout:

@@ -174,6 +174,7 @@ class ExternalIndicatorImporter:
             self.catalog.executemany(_UPSERT_SQL, rows)
             report.inserted = len(rows) - before if before else len(rows)
             report.deduped += before
+            self._write_through_catalog(config)
         return report
 
     def preview(self, path: str | Path, limit: int = 10) -> dict:
@@ -181,6 +182,42 @@ class ExternalIndicatorImporter:
         return preview_csv(path, limit)
 
     # ── internals ───────────────────────────────────────────────────────────
+
+    def _write_through_catalog(self, config: ImportConfig) -> None:
+        """P1-3: after a successful data UPSERT, register/refresh the key's
+        row in ``silver_external_indicator_catalog``.
+
+        Side effect only — a catalog failure must never fail the data import
+        (the data rows are already committed; the catalog row can be repaired
+        by the startup migration ``backfill_catalog_from_data``). Runtime
+        fields (``last_status`` / ``last_refresh_at``) are owned by
+        :func:`mark_refresh_result`, so they are set there, not via upsert.
+
+        ``display_name`` is left ``None``: fresh inserts default it to
+        ``indicator_key``, and re-imports must not clobber a user-customized
+        display name.
+        """
+        from cquant.datahub.pipelines.indicator_catalog import (
+            CatalogEntryInput,
+            mark_refresh_result,
+            upsert_catalog_entry,
+        )
+
+        try:
+            upsert_catalog_entry(
+                self.catalog,
+                CatalogEntryInput(
+                    indicator_key=config.indicator_key,
+                    source_type="csv",
+                    source_name=config.source,
+                    available_date_rule=config.available_date_rule,
+                ),
+            )
+            mark_refresh_result(self.catalog, config.indicator_key, status="ok")
+        except Exception as exc:
+            logger.warning(
+                "catalog write-through failed for %s: %s", config.indicator_key, exc
+            )
 
     def _validate_config(self, config: ImportConfig, report: ImportReport) -> None:
         if not _INDICATOR_KEY_RE.match(config.indicator_key or ""):

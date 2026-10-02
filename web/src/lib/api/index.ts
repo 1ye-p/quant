@@ -77,6 +77,11 @@ export type {
   ExtIndCatalogDetail,
   ExtIndCatalogPatch,
   ExtIndDeleteResult,
+  ExtIndBuiltin,
+  ExtIndEnableResult,
+  ExtIndRefreshResult,
+  ExtIndRefreshSummary,
+  ExtIndRun,
 } from './datasets'
 
 export { dashboardApi } from './dashboard'

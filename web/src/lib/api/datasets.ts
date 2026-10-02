@@ -192,6 +192,37 @@ export const datasetsApi = {
       `/datasets/external-indicators/catalog/${encodeURIComponent(key)}?purge_data=${purgeData}`,
       config,
     ),
+
+  // ── Built-in catalog + refresh + runs (P2) ───────────────────────────────
+
+  listExtIndBuiltins: (config?: RequestConfig) =>
+    api.get<{ items: ExtIndBuiltin[]; total: number }>(
+      '/datasets/external-indicators/builtins',
+      config,
+    ),
+
+  enableExtIndBuiltin: (key: string, backfillStart?: string, config?: RequestConfig) =>
+    api.post<ExtIndEnableResult>(
+      `/datasets/external-indicators/builtins/${encodeURIComponent(key)}/enable`,
+      backfillStart ? { backfill_start: backfillStart } : {},
+      config,
+    ),
+
+  refreshExtIndicators: (
+    body: { keys?: string[]; backfill?: boolean },
+    config?: RequestConfig,
+  ) =>
+    api.post<ExtIndRefreshSummary>(
+      '/datasets/external-indicators/refresh',
+      body,
+      config,
+    ),
+
+  listExtIndRuns: (key = '', limit = 50, config?: RequestConfig) =>
+    api.get<{ items: ExtIndRun[]; total: number }>(
+      `/datasets/external-indicators/runs?key=${encodeURIComponent(key)}&limit=${limit}`,
+      config,
+    ),
 }
 
 // ── External indicator catalog types ────────────────────────────────────────
@@ -241,6 +272,68 @@ export interface ExtIndDeleteResult {
   deleted: string
   purged_data: boolean
   detail: string
+}
+
+// ── Built-in catalog / refresh / runs types (P2) ────────────────────────────
+
+/** One built-in indicator as returned by GET /external-indicators/builtins. */
+export interface ExtIndBuiltin {
+  indicator_key: string
+  display_name: string
+  unit: string | null
+  description: string | null
+  available_date_rule: 'A' | 'B'
+  frequency: 'daily' | 'weekly' | 'monthly'
+  default_backfill_years: number
+  candidates: { name: string; ready: boolean }[]
+  enabled: boolean
+}
+
+/** POST /builtins/{key}/enable response = catalog row + backfill payload.
+ *  `backfill` is "pending" when the refresh module is not yet wired, else a
+ *  RefreshSummary-shaped object (loose typing: backend returns either). */
+export interface ExtIndEnableResult extends ExtIndCatalogEntry {
+  backfill: 'pending' | Record<string, unknown>
+}
+
+/** Per-key result row inside a RefreshSummary. */
+export interface ExtIndRefreshResult {
+  indicator_key: string
+  source: string | null
+  status: 'ok' | 'error' | 'skipped'
+  rows_fetched: number
+  rows_upserted: number
+  error: string | null
+  range_start: string | null
+  range_end: string | null
+}
+
+/** POST /external-indicators/refresh response. */
+export interface ExtIndRefreshSummary {
+  trigger: string
+  started_at: string
+  finished_at: string | null
+  results: ExtIndRefreshResult[]
+  ok: number
+  error: number
+}
+
+/** One refresh_log row as returned by GET /external-indicators/runs.
+ *  `interrupted` is a rendering-layer flag (status='running' stale > 1h). */
+export interface ExtIndRun {
+  run_id: number
+  indicator_key: string
+  source_name: string | null
+  started_at: string | null
+  finished_at: string | null
+  status: string
+  trigger: string | null
+  range_start: string | null
+  range_end: string | null
+  rows_fetched: number | null
+  rows_upserted: number | null
+  error: string | null
+  interrupted: boolean
 }
 
 

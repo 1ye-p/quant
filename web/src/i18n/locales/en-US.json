@@ -3010,8 +3010,51 @@
           "delete_failed": "Delete failed"
         },
         "placeholder": {
-          "builtin": "Built-in catalog coming soon (P2)",
           "custom": "Custom sources coming soon (P3)"
+        },
+        "builtin": {
+          "total": "{{count}} built-in indicator(s)",
+          "refresh_all": "Refresh All (Due)",
+          "empty": "Built-in catalog is empty",
+          "column": {
+            "unit": "Unit",
+            "sources": "Sources",
+            "backfill_years": "Default Backfill"
+          },
+          "source_ready": "This source is currently available",
+          "source_not_ready": "This source is currently unavailable",
+          "tushare_hint": "tushare requires TUSHARE_TOKEN to be configured",
+          "enabled_badge": "Enabled",
+          "disabled_badge": "Not enabled",
+          "backfill_years_value": "{{years}} yr",
+          "enable": "Enable & Backfill",
+          "refresh_one": "Refresh Now",
+          "enable_title": "Enable built-in indicator: {{key}}",
+          "enable_message": "This will enable \"{{name}}\" and trigger a backfill of the last {{years}} year(s) by default.",
+          "backfill_start_optional": "Backfill start (optional, leave empty for default years)",
+          "refresh_all_confirm_title": "Refresh all due indicators",
+          "refresh_all_confirm_message": "This triggers an incremental refresh for all enabled and due built-in indicators and may take several minutes. Continue?",
+          "runs": {
+            "title": "Run History",
+            "show": "Show",
+            "hide": "Hide",
+            "all_keys": "All indicators",
+            "empty": "No runs yet",
+            "started": "Started",
+            "rows": "Rows (upserted/fetched)",
+            "range": "Window",
+            "error": "Error",
+            "interrupted": "Interrupted",
+            "interrupted_hint": "Running for over 1 hour — treated as a stale record left by an interrupted process"
+          },
+          "toast": {
+            "enabled": "{{key}} enabled and backfilled",
+            "enabled_pending": "{{key}} enabled (backfill pending)",
+            "enable_failed": "Enable failed",
+            "refresh_done": "Refresh finished: {{ok}} ok, {{error}} failed",
+            "refresh_done_errors": "Refresh finished with failures: {{ok}} ok, {{error}} failed",
+            "refresh_failed": "Refresh failed"
+          }
         }
       }
     },

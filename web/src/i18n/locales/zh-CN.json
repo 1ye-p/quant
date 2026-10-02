@@ -3010,8 +3010,51 @@
           "delete_failed": "删除失败"
         },
         "placeholder": {
-          "builtin": "内置目录即将上线（P2）",
           "custom": "自定义数据源即将上线（P3）"
+        },
+        "builtin": {
+          "total": "共 {{count}} 个内置指标",
+          "refresh_all": "全部刷新（到期）",
+          "empty": "内置目录为空",
+          "column": {
+            "unit": "单位",
+            "sources": "候选源",
+            "backfill_years": "默认回填"
+          },
+          "source_ready": "该数据源当前可用",
+          "source_not_ready": "该数据源当前不可用",
+          "tushare_hint": "tushare 需要配置 TUSHARE_TOKEN 后可用",
+          "enabled_badge": "已启用",
+          "disabled_badge": "未启用",
+          "backfill_years_value": "{{years}} 年",
+          "enable": "启用并回填",
+          "refresh_one": "立即刷新",
+          "enable_title": "启用内置指标：{{key}}",
+          "enable_message": "将启用「{{name}}」并触发回填，默认回填近 {{years}} 年数据。",
+          "backfill_start_optional": "回填起始日（可选，留空使用默认年限）",
+          "refresh_all_confirm_title": "全部刷新（到期指标）",
+          "refresh_all_confirm_message": "将对所有已启用且到期的内置指标触发增量刷新，可能耗时数分钟。确定继续？",
+          "runs": {
+            "title": "运行历史",
+            "show": "展开",
+            "hide": "收起",
+            "all_keys": "全部指标",
+            "empty": "暂无运行记录",
+            "started": "开始时间",
+            "rows": "行数（写入/抓取）",
+            "range": "窗口",
+            "error": "错误",
+            "interrupted": "已中断",
+            "interrupted_hint": "运行中状态超过 1 小时，视为进程中断遗留的陈旧记录"
+          },
+          "toast": {
+            "enabled": "已启用 {{key}} 并完成回填",
+            "enabled_pending": "已启用 {{key}}（回填任务待接入）",
+            "enable_failed": "启用失败",
+            "refresh_done": "刷新完成：成功 {{ok}}，失败 {{error}}",
+            "refresh_done_errors": "刷新完成（有失败）：成功 {{ok}}，失败 {{error}}",
+            "refresh_failed": "刷新失败"
+          }
         }
       }
     },

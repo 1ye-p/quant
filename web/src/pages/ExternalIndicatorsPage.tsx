@@ -197,7 +197,7 @@ function DeleteDialog({
 }
 
 function statusBadgeClass(status: string | null): string {
-  if (status === 'success') return 'bg-green-100 text-green-700'
+  if (status === 'ok') return 'bg-green-100 text-green-700'
   if (status === 'error') return 'bg-red-100 text-red-700'
   if (status === 'running') return 'bg-blue-100 text-blue-700 animate-pulse'
   return 'bg-gray-100 text-gray-600'

@@ -33,7 +33,7 @@ function EditDialog({
   const [displayName, setDisplayName] = useState(entry.display_name)
   const [unit, setUnit] = useState(entry.unit ?? '')
   const [description, setDescription] = useState(entry.description ?? '')
-  const [frequency, setFrequency] = useState<'daily' | 'weekly'>(entry.frequency)
+  const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly'>(entry.frequency)
   const [enabled, setEnabled] = useState(entry.enabled)
   const [rule, setRule] = useState<'A' | 'B'>(entry.available_date_rule)
   const [backfillStart, setBackfillStart] = useState(entry.backfill_start ?? '')
@@ -76,9 +76,10 @@ function EditDialog({
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">{t('page.datasets.extInd.edit.frequency')}</label>
-            <select value={frequency} onChange={e => setFrequency(e.target.value as 'daily' | 'weekly')} className="input-field text-sm w-full">
+            <select value={frequency} onChange={e => setFrequency(e.target.value as 'daily' | 'weekly' | 'monthly')} className="input-field text-sm w-full">
               <option value="daily">{t('page.datasets.extInd.edit.daily')}</option>
               <option value="weekly">{t('page.datasets.extInd.edit.weekly')}</option>
+              <option value="monthly">{t('page.datasets.extInd.edit.monthly')}</option>
             </select>
           </div>
         </div>

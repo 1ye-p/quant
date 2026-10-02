@@ -14,9 +14,11 @@ export {
   type RetryConfig,
 } from './api/client'
 
+export { ApiError } from './api/errors'
+
 // ── Domain APIs ────────────────────────────────────────────────────────────
 
-export { datasetsApi } from './api/datasets'
+export { datasetsApi, extractExtIndStageError } from './api/datasets'
 export type {
   DatasetVersion,
   ExtIndPreview,
@@ -31,6 +33,9 @@ export type {
   ExtIndRefreshResult,
   ExtIndRefreshSummary,
   ExtIndRun,
+  CustomHTTPSourceConfig,
+  ExtIndCustomCreateBody,
+  ExtIndTestResult,
 } from './api/datasets'
 
 export { dashboardApi } from './api/dashboard'

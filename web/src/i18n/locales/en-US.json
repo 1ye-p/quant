@@ -2991,7 +2991,8 @@
           "backfill_start": "Backfill start",
           "enabled": "Enabled",
           "save": "Save",
-          "cancel": "Cancel"
+          "cancel": "Cancel",
+          "monthly": "Monthly"
         },
         "delete": {
           "title": "Delete indicator: {{key}}",
@@ -3008,9 +3009,6 @@
           "deleted": "Catalog row deleted (data preserved)",
           "deleted_purged": "Catalog row and data purged",
           "delete_failed": "Delete failed"
-        },
-        "placeholder": {
-          "custom": "Custom sources coming soon (P3)"
         },
         "builtin": {
           "total": "{{count}} built-in indicator(s)",
@@ -3054,6 +3052,68 @@
             "refresh_done": "Refresh finished: {{ok}} ok, {{error}} failed",
             "refresh_done_errors": "Refresh finished with failures: {{ok}} ok, {{error}} failed",
             "refresh_failed": "Refresh failed"
+          }
+        },
+        "custom": {
+          "total": "{{count}} custom source(s)",
+          "new": "New custom source",
+          "new_title": "New custom source (custom_http)",
+          "edit_title": "Edit custom source: {{key}}",
+          "empty": "No custom sources yet — click \"New custom source\" to create one",
+          "redacted_hint": "Stored secrets are protected (shown as ***redacted***); ${VAR} references are kept verbatim — retype a plaintext value to override",
+          "redacted_required": "The form still contains a redacted echo value (***redacted***). Re-enter the real value (or switch to a ${ENV_VAR} reference) before saving config changes",
+          "test": "Test connection",
+          "test_ok": "Test succeeded (nothing persisted)",
+          "save": "Save",
+          "stage_label": "Failure stage",
+          "resolved_url": "Resolved URL",
+          "rows_parsed": "Rows parsed",
+          "form": {
+            "indicator_key": "Indicator key",
+            "indicator_key_hint": "Immutable after creation; lowercase letters/digits/underscores only",
+            "indicator_key_invalid": "Indicator key allows only [a-z_0-9]+",
+            "required": "Required",
+            "method": "Method",
+            "url_template": "URL template",
+            "url_template_hint": "Use a {date} placeholder, e.g. https://api.example.com/v1/data?d={date}",
+            "headers": "Headers",
+            "params": "Query params",
+            "kv_hint": "Values may reference server-side env vars as ${ENV_VAR}",
+            "kv_add": "Add row",
+            "date_param_style": "Date param style",
+            "style_yyyymmdd": "yyyymmdd (e.g. 20260101)",
+            "style_iso": "yyyy-mm-dd (e.g. 2026-01-01)",
+            "style_none": "No date param (full-history endpoint)",
+            "records_path": "Records path (JSONPath)",
+            "records_path_hint": "e.g. $.data.list; syntax is validated on save",
+            "field_trade_date": "Date field",
+            "field_value": "Value field",
+            "allow_insecure_http": "Allow http:// (insecure)",
+            "timeout_connect": "Connect timeout (s, ≤60)",
+            "timeout_total": "Total timeout (s, ≤120)",
+            "max_bytes": "Max response bytes (≤50MiB)"
+          },
+          "stage": {
+            "config_invalid": "Config validation failed",
+            "ssrf_blocked": "Blocked by SSRF guard (private/illegal address)",
+            "timeout": "Request timed out",
+            "oversized": "Response exceeded the size limit",
+            "redirect_blocked": "Redirect budget exhausted or target blocked",
+            "json_parse": "Failed to parse response JSON",
+            "path_miss": "JSONPath matched no records (check records_path)",
+            "env_missing": "Referenced env var is not set (${VAR})",
+            "dns": "DNS resolution failed",
+            "too_many_requests": "Rate limited by upstream",
+            "http_error": "Upstream returned an error status",
+            "request_failed": "Request failed",
+            "date_render": "Failed to render date param",
+            "unknown": "Unknown error"
+          },
+          "toast": {
+            "saved": "Custom source saved",
+            "save_failed": "Save failed",
+            "duplicate": "Indicator key already exists (409): pick another key or edit the existing row",
+            "load_failed": "Failed to load config"
           }
         }
       }

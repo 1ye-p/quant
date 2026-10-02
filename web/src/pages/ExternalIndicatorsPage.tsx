@@ -16,6 +16,7 @@ import { queryKeys } from '@/lib/queryKeys'
 import { ExternalIndicatorsImportPage } from '@/pages/ExternalIndicatorsImport'
 import { CatalogTab } from './external-indicators/CatalogTab'
 import { BuiltinTab } from './external-indicators/BuiltinTab'
+import { CustomTab } from './external-indicators/CustomTab'
 
 type TabKey = 'catalog' | 'import' | 'builtin' | 'custom'
 
@@ -63,11 +64,7 @@ export function ExternalIndicatorsPage() {
         />
       )}
       {activeTab === 'builtin' && <BuiltinTab />}
-      {activeTab === 'custom' && (
-        <div className="card flex items-center justify-center h-64 text-gray-400 text-sm">
-          {t('page.datasets.extInd.placeholder.custom')}
-        </div>
-      )}
+      {activeTab === 'custom' && <CustomTab />}
     </div>
   )
 }

@@ -2,17 +2,35 @@ import { renderWithProviders } from '../../test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { ExternalIndicatorsPage } from '../ExternalIndicatorsPage'
+import { ApiError } from '@/lib/api'
 
-const { listExtIndBuiltinsMock, enableExtIndBuiltinMock, refreshExtIndicatorsMock, listExtIndRunsMock } =
-  vi.hoisted(() => ({
-    listExtIndBuiltinsMock: vi.fn(),
-    enableExtIndBuiltinMock: vi.fn(),
-    refreshExtIndicatorsMock: vi.fn(),
-    listExtIndRunsMock: vi.fn(),
-  }))
+const {
+  listExtIndBuiltinsMock,
+  enableExtIndBuiltinMock,
+  refreshExtIndicatorsMock,
+  listExtIndRunsMock,
+  createExtIndCustomMock,
+  testExtIndCustomMock,
+  getExtIndCatalogMock,
+  patchExtIndCatalogMock,
+} = vi.hoisted(() => ({
+  listExtIndBuiltinsMock: vi.fn(),
+  enableExtIndBuiltinMock: vi.fn(),
+  refreshExtIndicatorsMock: vi.fn(),
+  listExtIndRunsMock: vi.fn(),
+  createExtIndCustomMock: vi.fn(),
+  testExtIndCustomMock: vi.fn(),
+  getExtIndCatalogMock: vi.fn(),
+  patchExtIndCatalogMock: vi.fn(),
+}))
 
-vi.mock('@/lib/api', () => ({
-  datasetsApi: {
+// Spread the actual module so ApiError / extractExtIndStageError stay real;
+// only datasetsApi methods are stubbed.
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    datasetsApi: {
     listExtIndCatalog: vi.fn().mockResolvedValue({
       total: 2,
       items: [
@@ -62,8 +80,13 @@ vi.mock('@/lib/api', () => ({
     enableExtIndBuiltin: enableExtIndBuiltinMock,
     refreshExtIndicators: refreshExtIndicatorsMock,
     listExtIndRuns: listExtIndRunsMock,
+    createExtIndCustom: createExtIndCustomMock,
+    testExtIndCustom: testExtIndCustomMock,
+    getExtIndCatalog: getExtIndCatalogMock,
+    patchExtIndCatalog: patchExtIndCatalogMock,
   },
-}))
+  }
+})
 
 const BUILTIN_ITEMS = [
   {
@@ -225,5 +248,114 @@ describe('ExternalIndicatorsPage', () => {
     expect(await screen.findByText('已中断')).toBeInTheDocument()
     expect(screen.getByText('4/4')).toBeInTheDocument()
     expect(listExtIndRunsMock).toHaveBeenCalledWith('', 20)
+  })
+
+  // ── Custom sources tab (P3-5) ──────────────────────────────────────────────
+
+  it('custom tab lists custom_http rows only and opens the create form', async () => {
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click(screen.getByText('自定义源'))
+
+    expect(await screen.findByText('共 0 个自定义源')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('新建自定义源'))
+    expect(screen.getByText('新建自定义源（custom_http）')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('my_indicator')).toBeInTheDocument()
+  })
+
+  it('test button posts the form config and renders the sample table', async () => {
+    testExtIndCustomMock.mockResolvedValue({
+      sample: [
+        { trade_date: '2026-09-28', value: 123.45 },
+        { trade_date: '2026-09-29', value: null },
+      ],
+      diagnostics: {
+        resolved_url: 'https://api.example.com/v1/data?d=20260929',
+        status: 'ok',
+        rows_parsed: 2,
+        field_map_hit: true,
+      },
+    })
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click(screen.getByText('自定义源'))
+    fireEvent.click(screen.getByText('新建自定义源'))
+
+    fireEvent.change(screen.getByPlaceholderText('my_indicator'), { target: { value: 'my_ind' } })
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1/data?d={date}'), {
+      target: { value: 'https://api.example.com/v1/data?d={date}' },
+    })
+    fireEvent.click(screen.getByText('测试连接'))
+
+    await waitFor(() => expect(testExtIndCustomMock).toHaveBeenCalledTimes(1))
+    const cfg = testExtIndCustomMock.mock.calls[0][0]
+    expect(cfg.url_template).toBe('https://api.example.com/v1/data?d={date}')
+    expect(cfg.method).toBe('GET')
+    expect(cfg.date_param_style).toBe('yyyymmdd')
+    expect(cfg.extraction.records_path).toBe('$.data.list')
+    expect(cfg.extraction.field_map).toEqual({ trade_date: 'trade_date', value: 'value' })
+
+    expect(await screen.findByText('测试成功（未入库）')).toBeInTheDocument()
+    expect(screen.getByText('123.45')).toBeInTheDocument()
+    expect(screen.getByText(/api.example.com\/v1\/data\?d=20260929/)).toBeInTheDocument()
+  })
+
+  it('test failure with a stage tag maps to the bilingual stage message', async () => {
+    testExtIndCustomMock.mockRejectedValue(
+      new ApiError('HTTP 400', {
+        status: 400,
+        details: { detail: { stage: 'ssrf_blocked', message: 'URL has no hostname' } },
+      }),
+    )
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click(screen.getByText('自定义源'))
+    fireEvent.click(screen.getByText('新建自定义源'))
+    fireEvent.change(screen.getByPlaceholderText('my_indicator'), { target: { value: 'my_ind' } })
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1/data?d={date}'), {
+      target: { value: 'https://api.example.com/v1/data?d={date}' },
+    })
+    fireEvent.click(screen.getByText('测试连接'))
+
+    expect(await screen.findByText(/请求被 SSRF 防护拦截/)).toBeInTheDocument()
+    expect(screen.getByText('URL has no hostname')).toBeInTheDocument()
+  })
+
+  it('save posts the create body and returns to the row list on success', async () => {
+    createExtIndCustomMock.mockResolvedValue({ indicator_key: 'my_ind' })
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click(screen.getByText('自定义源'))
+    fireEvent.click(screen.getByText('新建自定义源'))
+    fireEvent.change(screen.getByPlaceholderText('my_indicator'), { target: { value: 'my_ind' } })
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1/data?d={date}'), {
+      target: { value: 'https://api.example.com/v1/data?d={date}' },
+    })
+    fireEvent.click(screen.getByText('保存'))
+
+    await waitFor(() => expect(createExtIndCustomMock).toHaveBeenCalledTimes(1))
+    const body = createExtIndCustomMock.mock.calls[0][0]
+    expect(body.indicator_key).toBe('my_ind')
+    expect(body.frequency).toBe('daily')
+    expect(body.available_date_rule).toBe('B')
+    expect(body.source_config.extraction.type).toBe('jsonpath')
+    // back on the row list
+    expect(await screen.findByText('新建自定义源')).toBeInTheDocument()
+    expect(screen.queryByText('保存')).not.toBeInTheDocument()
+  })
+
+  it('409 duplicate key surfaces the duplicate message without leaving the form', async () => {
+    createExtIndCustomMock.mockRejectedValue(
+      new ApiError("indicator_key 已存在：'my_ind'", { status: 409 }),
+    )
+    renderWithProviders(<ExternalIndicatorsPage />)
+    fireEvent.click(screen.getByText('自定义源'))
+    fireEvent.click(screen.getByText('新建自定义源'))
+    fireEvent.change(screen.getByPlaceholderText('my_indicator'), { target: { value: 'my_ind' } })
+    fireEvent.change(screen.getByPlaceholderText('https://api.example.com/v1/data?d={date}'), {
+      target: { value: 'https://api.example.com/v1/data?d={date}' },
+    })
+    fireEvent.click(screen.getByText('保存'))
+
+    await waitFor(() => expect(createExtIndCustomMock).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/指标键已存在（409）/)).toBeInTheDocument()
+    // form is still open
+    expect(screen.getByText('新建自定义源（custom_http）')).toBeInTheDocument()
   })
 })

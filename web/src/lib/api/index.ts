@@ -67,7 +67,7 @@ export type {
   ViewSpec,
 } from './optimize'
 
-export { datasetsApi } from './datasets'
+export { datasetsApi, extractExtIndStageError } from './datasets'
 export type {
   DatasetVersion,
   ExtIndPreview,
@@ -82,6 +82,9 @@ export type {
   ExtIndRefreshResult,
   ExtIndRefreshSummary,
   ExtIndRun,
+  CustomHTTPSourceConfig,
+  ExtIndCustomCreateBody,
+  ExtIndTestResult,
 } from './datasets'
 
 export { dashboardApi } from './dashboard'

@@ -3,6 +3,7 @@
  */
 
 import { api, request, type RequestConfig } from './client'
+import { ApiError } from './errors'
 
 // ── Types (not yet in types/) ────────────────────────────────────────────────
 
@@ -223,12 +224,50 @@ export const datasetsApi = {
       `/datasets/external-indicators/runs?key=${encodeURIComponent(key)}&limit=${limit}`,
       config,
     ),
+
+  // ── Custom HTTP sources (P3) ────────────────────────────────────────────
+
+  /** Create a custom_http catalog row. 201 on success; 409 duplicate key;
+   *  400 with a `{stage, message}` detail on bad configs (see
+   *  extractExtIndStageError). */
+  createExtIndCustom: (body: ExtIndCustomCreateBody, config?: RequestConfig) =>
+    api.post<ExtIndCatalogDetail>('/datasets/external-indicators/catalog', body, config),
+
+  /** Connection test — single guarded fetch, nothing persisted. Needs a long
+   *  client timeout: the guard may wait out the full server-side budget
+   *  (up to 120 s) before returning a stage-tagged 400. */
+  testExtIndCustom: (sourceConfig: CustomHTTPSourceConfig, config?: RequestConfig) =>
+    api.post<ExtIndTestResult>(
+      '/datasets/external-indicators/test',
+      { source_config: sourceConfig },
+      { timeout: 130_000, ...config },
+    ),
+}
+
+/** Extract the backend's stage-tagged 400 detail shape
+ *  (`HTTPException(detail={"stage": ..., "message": ...})`) from an ApiError.
+ *  Non-object details (409 duplicate / plain string 400s) yield stage=null. */
+export function extractExtIndStageError(e: unknown): { stage: string | null; message: string } {
+  if (e instanceof ApiError) {
+    const detail = (e.details as { detail?: unknown } | undefined)?.detail
+    if (detail !== null && typeof detail === 'object') {
+      const { stage, message } = detail as { stage?: unknown; message?: unknown }
+      return {
+        stage: typeof stage === 'string' ? stage : null,
+        message: typeof message === 'string' ? message : e.message,
+      }
+    }
+    return { stage: null, message: e.message }
+  }
+  return { stage: null, message: e instanceof Error ? e.message : String(e) }
 }
 
 // ── External indicator catalog types ────────────────────────────────────────
 
 /** One catalog row as returned by GET /external-indicators/catalog (list or detail).
- *  `latest_trade_date` / `stale` are live-freshness fields computed server-side. */
+ *  `latest_trade_date` / `stale` are live-freshness fields computed server-side.
+ *  `source_config` is a JSON string for csv rows and a (redacted) object for
+ *  custom_http rows — see CustomHTTPSourceConfig. */
 export interface ExtIndCatalogEntry {
   indicator_key: string
   display_name: string
@@ -237,9 +276,9 @@ export interface ExtIndCatalogEntry {
   source_type: string
   source_name: string | null
   pinned_source: string | null
-  source_config: string | null
+  source_config: string | Record<string, unknown> | null
   available_date_rule: 'A' | 'B'
-  frequency: 'daily' | 'weekly'
+  frequency: 'daily' | 'weekly' | 'monthly'
   backfill_start: string | null
   enabled: boolean
   last_refresh_at: string | null
@@ -255,16 +294,18 @@ export interface ExtIndCatalogDetail extends ExtIndCatalogEntry {
   preview: { trade_date: string; value: number | null; available_date: string }[]
 }
 
-/** PATCH whitelist (P1). pinned_source / source_config are P2/P3-reserved and
- *  rejected by the backend — never send them from the client. */
+/** PATCH whitelist. `pinned_source` remains a reserved field the backend
+ *  rejects; `source_config` (P3-4) is custom_http-only and replaces the whole
+ *  stored config when provided. Absent fields keep their stored values. */
 export interface ExtIndCatalogPatch {
   display_name?: string
   unit?: string
   description?: string
-  frequency?: 'daily' | 'weekly'
+  frequency?: 'daily' | 'weekly' | 'monthly'
   enabled?: boolean
   available_date_rule?: 'A' | 'B'
   backfill_start?: string
+  source_config?: CustomHTTPSourceConfig
 }
 
 /** DELETE response. `purged_data` echoes the purge_data query param. */
@@ -360,4 +401,52 @@ export interface ExtIndImportConfig {
   column_map: Record<string, string>
   /** A = available on trade_date, B = next trading day (conservative default) */
   available_date_rule: 'A' | 'B'
+}
+
+// ── Custom HTTP source types (P3) ──────────────────────────────────────────
+
+/** Mirror of the backend CustomHTTPConfig pydantic model
+ *  (datahub/pipelines/indicator_sources/http_config.py). Sent verbatim as
+ *  `source_config` on create / PATCH / test. */
+export interface CustomHTTPSourceConfig {
+  method: 'GET' | 'POST'
+  url_template: string
+  /** Values may reference server-side env vars as `${VAR}` (rendered by the
+   *  backend, never stored as secrets in the browser). */
+  headers: Record<string, string>
+  params: Record<string, string>
+  date_param_style: 'yyyymmdd' | 'yyyy-mm-dd' | 'none'
+  extraction: {
+    type: 'jsonpath'
+    records_path: string
+    field_map: Record<string, string>
+  }
+  allow_insecure_http: boolean
+  timeout_connect_sec: number
+  timeout_total_sec: number
+  max_bytes: number
+}
+
+/** POST /external-indicators/catalog (custom_http creation) body. */
+export interface ExtIndCustomCreateBody {
+  indicator_key: string
+  display_name?: string
+  unit?: string
+  description?: string
+  frequency: 'daily' | 'weekly' | 'monthly'
+  available_date_rule: 'A' | 'B'
+  backfill_start?: string
+  source_name?: string
+  source_config: CustomHTTPSourceConfig
+}
+
+/** POST /external-indicators/test success response. */
+export interface ExtIndTestResult {
+  sample: { trade_date: string; value: number | null }[]
+  diagnostics: {
+    resolved_url: string
+    status: string
+    rows_parsed: number
+    field_map_hit: boolean
+  }
 }

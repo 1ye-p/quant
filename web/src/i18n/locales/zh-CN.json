@@ -2991,7 +2991,8 @@
           "backfill_start": "回补起始日",
           "enabled": "启用该指标",
           "save": "保存",
-          "cancel": "取消"
+          "cancel": "取消",
+          "monthly": "月频"
         },
         "delete": {
           "title": "删除指标：{{key}}",
@@ -3008,9 +3009,6 @@
           "deleted": "目录行已删除（数据保留）",
           "deleted_purged": "目录行与数据已一并删除",
           "delete_failed": "删除失败"
-        },
-        "placeholder": {
-          "custom": "自定义数据源即将上线（P3）"
         },
         "builtin": {
           "total": "共 {{count}} 个内置指标",
@@ -3054,6 +3052,68 @@
             "refresh_done": "刷新完成：成功 {{ok}}，失败 {{error}}",
             "refresh_done_errors": "刷新完成（有失败）：成功 {{ok}}，失败 {{error}}",
             "refresh_failed": "刷新失败"
+          }
+        },
+        "custom": {
+          "total": "共 {{count}} 个自定义源",
+          "new": "新建自定义源",
+          "new_title": "新建自定义源（custom_http）",
+          "edit_title": "编辑自定义源：{{key}}",
+          "empty": "暂无自定义源，点击「新建自定义源」创建",
+          "redacted_hint": "已存储的敏感值受保护（显示为 ***redacted***）；${VAR} 引用原样保留，重新输入明文可覆盖",
+          "redacted_required": "该表单包含脱敏回显值（***redacted***）。修改配置前请重新输入真实值，或改用 ${ENV_VAR} 环境变量引用",
+          "test": "测试连接",
+          "test_ok": "测试成功（未入库）",
+          "save": "保存",
+          "stage_label": "失败环节",
+          "resolved_url": "实际请求 URL",
+          "rows_parsed": "解析行数",
+          "form": {
+            "indicator_key": "指标键",
+            "indicator_key_hint": "创建后不可修改；仅小写字母/数字/下划线",
+            "indicator_key_invalid": "指标键仅允许小写字母/数字/下划线 [a-z_0-9]+",
+            "required": "必填项",
+            "method": "请求方法",
+            "url_template": "URL 模板",
+            "url_template_hint": "用 {date} 占位，如 https://api.example.com/v1/data?d={date}",
+            "headers": "请求头（Headers）",
+            "params": "查询参数（Params）",
+            "kv_hint": "值支持 ${ENV_VAR} 环境变量引用（服务端渲染，不存明文）",
+            "kv_add": "添加一行",
+            "date_param_style": "日期参数格式",
+            "style_yyyymmdd": "yyyymmdd（如 20260101）",
+            "style_iso": "yyyy-mm-dd（如 2026-01-01）",
+            "style_none": "无日期参数（全量接口）",
+            "records_path": "记录路径（JSONPath）",
+            "records_path_hint": "如 $.data.list；保存时预校验语法",
+            "field_trade_date": "日期字段名",
+            "field_value": "数值字段名",
+            "allow_insecure_http": "允许 http://（不安全）",
+            "timeout_connect": "连接超时（秒，≤60）",
+            "timeout_total": "总超时（秒，≤120）",
+            "max_bytes": "响应上限（字节，≤50MiB）"
+          },
+          "stage": {
+            "config_invalid": "配置校验失败",
+            "ssrf_blocked": "请求被 SSRF 防护拦截（内网/非法地址）",
+            "timeout": "请求超时",
+            "oversized": "响应超过体积上限",
+            "redirect_blocked": "重定向次数超限或目标被拦截",
+            "json_parse": "响应 JSON 解析失败",
+            "path_miss": "JSONPath 未命中记录（检查 records_path）",
+            "env_missing": "引用的环境变量未设置（${VAR}）",
+            "dns": "域名解析失败",
+            "too_many_requests": "请求过于频繁（限流）",
+            "http_error": "上游接口返回错误状态码",
+            "request_failed": "请求失败",
+            "date_render": "日期参数渲染失败",
+            "unknown": "未知错误"
+          },
+          "toast": {
+            "saved": "自定义源已保存",
+            "save_failed": "保存失败",
+            "duplicate": "指标键已存在（409）：请更换 indicator_key，或返回列表编辑已有条目",
+            "load_failed": "加载配置失败"
           }
         }
       }

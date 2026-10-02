@@ -20,6 +20,13 @@
     按 trade_date 外连接），不再预去重；
   - 缓存为 LRU（容量默认 32，环境变量 ``CQUANT_MARKET_PANEL_CACHE``
     可调；设为 0 完全禁用缓存，退回逐次查询的原始行为）。
+
+生命周期契约（设计 §9）：
+  - 实例必须短生命周期（每回测/fold 新建；``run.py`` 的
+    ``_regime_sm_for_strategy`` 每次调用均构造新实例，守护测试见
+    ``test_market_context.py::TestFreshInstanceInvariant``）；
+  - 若未来引入长驻实例，必须配套 TTL 或表级 epoch 失效——缓存内持有
+    的全历史修订行不会感知 catalog 侧的后续写入/修订。
 """
 
 from __future__ import annotations

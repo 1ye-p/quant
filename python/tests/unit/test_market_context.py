@@ -284,3 +284,44 @@ class TestPanelCache:
             )
         # one underlying query regardless of as_of count
         assert cached_ctx.load_count == 1
+
+
+class TestFreshInstanceInvariant:
+    """P2-6 guard: MarketSeriesContext must be short-lived — one fresh
+    instance per backtest/fold. ``_regime_sm_for_strategy`` (run.py) promises
+    a fresh instance on every call; this test prevents a future refactor from
+    silently breaking that invariant (which would turn the per-key revision
+    cache into a cross-run stale-data leak).
+    """
+
+    def test_regime_context_fresh_instance_per_call(self) -> None:
+        from types import SimpleNamespace
+
+        from cquant.backtest_vector.run import BacktestRunner
+        from cquant.strategy_dsl.market_context import MarketSeriesContext
+        from cquant.strategy_dsl.schema import RegimeDef
+
+        regime = RegimeDef(
+            mode="switch",
+            initial="risk_on",
+            indicators={"breadth": "k"},
+            states=[
+                {"name": "risk_on", "enter_when": "breadth > 0", "position_scale": 1.0},
+                {"name": "risk_off", "enter_when": "breadth <= 0", "position_scale": 0.5},
+            ],
+        )
+        strategy = SimpleNamespace(spec=SimpleNamespace(regime=regime))
+        runner = BacktestRunner(FakeCatalog(_full_table()))  # type: ignore[arg-type]
+
+        sm1 = runner._regime_sm_for_strategy(strategy)
+        sm2 = runner._regime_sm_for_strategy(strategy)
+
+        assert sm1 is not None and sm2 is not None
+        assert sm1 is not sm2  # fresh state machine per call (no latch leak)
+        assert isinstance(sm1._ctx, MarketSeriesContext)
+        assert isinstance(sm2._ctx, MarketSeriesContext)
+        assert sm1._ctx is not sm2._ctx  # the invariant under guard
+
+        # regime-less strategy still returns None (zero behaviour change)
+        plain = SimpleNamespace(spec=SimpleNamespace(regime=None))
+        assert runner._regime_sm_for_strategy(plain) is None

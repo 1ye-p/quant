@@ -65,7 +65,7 @@
 | 8 | 双引擎 parity 形式化 | 设计 §5 #1 | deferred | 设计 §5 #1：开源后 revisit Rust 事件引擎 parity 测试与编译体验 |
 | 9 | 数据广度缺口 | 设计 §5 #7 | deferred | 设计 §5 #7：分钟/tick/期货/期权/两融/北向/龙虎榜/宏观，按社区需求排期 |
 | 10 | catalog-only DELETE 的目录行会被下次启动迁移复活 | ext-ind P1 review | ✅ 已清除（commit 541b301） | DELETE 响应已提示复活语义 |
-| 11 | LICENSE 分层声明（§四-3） | 开源 readiness 终审 | ✅ 已清除（本批 commit） | NOTICE + README License 节已建；rust/ 子模块仓库内 LICENSE 待维护者补充（子模块仓库侧动作，非本仓 backlog）；CoC 举报渠道（[CoC] 邮箱 + GitHub 私信）已补 |
+| 11 | LICENSE 分层声明（§四-3） | 开源 readiness 终审 | ✅ 已清除（commit afad110） | NOTICE + README License 节已建；rust/ 子模块仓库内 LICENSE 待维护者补充（子模块仓库侧动作，非本仓 backlog）；CoC 举报渠道（[CoC] 邮箱 + GitHub 私信）已补 |
 
 ## 六、结论
 

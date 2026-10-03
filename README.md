@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/1ye-p/quant/actions/workflows/ci.yml/badge.svg)](https://github.com/1ye-p/quant/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-Apache_2.0-blue)
 
 ---
 
@@ -331,4 +331,6 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 
 ## License
 
-MIT
+本仓库（不含子模块）以 [Apache License 2.0](LICENSE) 授权；完整的分层许可声明见 [NOTICE](NOTICE)。
+
+通过 git submodule 捆绑的第三方项目保留各自上游许可证：[lib/qlib](lib/qlib/LICENSE)（MIT，Microsoft Corporation）、[lib/vibe-trading](lib/vibe-trading/LICENSE)（MIT，Vibe-Trading Contributors）。`rust/` 子模块（作者自有仓库）随主仓库以 Apache-2.0 授权，其仓库内 LICENSE 文件待补充。

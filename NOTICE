@@ -1,0 +1,15 @@
+cQuant
+Copyright 2026 cQuant Contributors
+
+本仓库（不含子模块）以 Apache License 2.0 授权，见根目录 LICENSE。
+
+本仓库通过 git submodule 捆绑以下第三方项目，各自保留并遵循其上游许可证（upstream license）：
+
+- lib/qlib — MIT License, Copyright (c) Microsoft Corporation
+- lib/vibe-trading — MIT License, Copyright (c) 2026 Vibe-Trading Contributors
+
+rust/（git submodule，quant-rust）由本仓库作者所有，随主仓库以 Apache License 2.0 授权；
+该子模块仓库内的 LICENSE 文件待补充，补充后本声明将随之更新。
+
+依据 Apache License 2.0 第 4 条（Section 4, Redistribution），上述 MIT 组件在再分发时
+需保留其版权与许可声明。

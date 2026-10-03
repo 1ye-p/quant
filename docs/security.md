@@ -89,3 +89,11 @@ Before exposing the API server beyond localhost:
 - [ ] The reverse proxy restricts `/api/v1/trading/*` to trusted networks regardless of API key
 - [ ] Related secrets (`TUSHARE_TOKEN`, LLM API keys) are provided via environment/secret manager, not committed to the repo
 - [ ] Key rotation schedule is defined (recommended: at least quarterly)
+
+## Vulnerability Reporting
+
+Do not open public issues for suspected vulnerabilities. Report privately to
+`rcritical@qq.com` with a `[Security]` subject prefix, or via GitHub direct
+message to [@1ye-p](https://github.com/1ye-p). Reports are handled
+confidentially by the maintainer. (For Code of Conduct concerns instead, use
+the `[CoC]` prefix — see [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md).)

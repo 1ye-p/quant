@@ -55,6 +55,10 @@ conda activate cQuanty
 
 参与本社区请遵循 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)（基于 Contributor Covenant v2.1）：尊重、聚焦技术、对新手友好。
 
+如需举报违反行为准则的行为（滥用、骚扰等），请邮件至 `rcritical@qq.com`（标题以 `[CoC]` 前缀），或通过 GitHub 私信联系 [@1ye-p](https://github.com/1ye-p)。详见[行为准则·执行](CODE_OF_CONDUCT.md#执行)。
+
 ## 7. 安全相关
 
-发现安全漏洞请勿直接开公开 issue，参见 [docs/security.md](docs/security.md) 的认证模型与部署清单，通过私密渠道联系维护者。
+发现安全漏洞请勿直接开公开 issue，参见 [docs/security.md](docs/security.md) 的认证模型与部署清单，通过私密渠道联系维护者：邮件至 `rcritical@qq.com`（标题以 `[Security]` 前缀）。
+
+> 联系渠道用途区分：`[CoC]` 前缀用于行为准则举报，`[Security]` 前缀用于安全漏洞报告，两者均由维护者保密处理。

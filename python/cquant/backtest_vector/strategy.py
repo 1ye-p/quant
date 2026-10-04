@@ -38,7 +38,15 @@ class Strategy(ABC):
     The default implementation is a no-op, so strategies that do not require
     training (e.g. StaticTopN, MultiFactor with fixed weights) work without
     modification.
+
+    Class/instance attribute ``required_history_days`` (trading days, default
+    0) declares how much pre-window history the strategy needs to see before
+    it can signal. Walk-forward fold backtests use it to prepend warmup data
+    to the fold window (the fold's ~50-day window alone can never satisfy a
+    180-day lookback).
     """
+
+    required_history_days: int = 0
 
     @property
     @abstractmethod

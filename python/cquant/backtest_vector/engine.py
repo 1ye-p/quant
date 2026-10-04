@@ -80,6 +80,10 @@ class BacktestSpec:
     # any RNG-using components draw from the global state (legacy behaviour).
     # When set, the same seed yields the same result across runs.
     random_seed: int | None = None
+    # Warmup trading days prepended to the price window for strategy context
+    # ONLY (e.g. WF fold backtests whose window is shorter than the strategy's
+    # lookback). Rebalance calendar, fills and stats still start at start_date.
+    warmup_days: int = 0
 
 
 @dataclass
@@ -476,16 +480,35 @@ class VectorBacktestEngine:
         run_id: str,
         started_at: datetime,
     ) -> BacktestResult:
-        # Filter prices to backtest window
-        prices = spec.prices.filter(
-            (pl.col("trade_date") >= spec.start_date)
-            & (pl.col("trade_date") <= spec.end_date)
-        ).sort(["trade_date", "asset_id"])
+        # Filter prices to backtest window, plus an optional warmup prefix of
+        # pre-window trading days. Warmup rows feed strategy context only —
+        # the rebalance calendar below still starts at spec.start_date, so
+        # warmup days never trade.
+        warmup = max(int(getattr(spec, "warmup_days", 0) or 0), 0)
+        if warmup > 0:
+            pre_dates = sorted(
+                spec.prices.filter(pl.col("trade_date") < spec.start_date)[
+                    "trade_date"
+                ].unique().to_list()
+            )
+            warmup_start = (
+                pre_dates[-min(warmup, len(pre_dates))] if pre_dates else spec.start_date
+            )
+            prices = spec.prices.filter(
+                (pl.col("trade_date") >= warmup_start)
+                & (pl.col("trade_date") <= spec.end_date)
+            ).sort(["trade_date", "asset_id"])
+        else:
+            prices = spec.prices.filter(
+                (pl.col("trade_date") >= spec.start_date)
+                & (pl.col("trade_date") <= spec.end_date)
+            ).sort(["trade_date", "asset_id"])
 
         if prices.is_empty():
             raise ValueError("No price data in the specified date range")
 
-        trade_dates = sorted(prices["trade_date"].unique().to_list())
+        all_dates = sorted(prices["trade_date"].unique().to_list())
+        trade_dates = [d for d in all_dates if d >= spec.start_date]
 
         # Pre-compute price matrices for O(1) lookups
         price_matrix, date_to_idx = self._build_price_matrix(prices)

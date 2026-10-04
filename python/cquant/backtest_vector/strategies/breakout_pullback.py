@@ -158,6 +158,10 @@ class BreakoutPullbackStrategy(Strategy):
     ) -> None:
         self._strategy_id = strategy_id
         self._cfg = config or DEFAULT_CONFIG
+        # generate_signals skips assets whose in-window history is shorter
+        # than min_list_days + 60 rows — WF fold warmup must cover this
+        # lookback or every fold comes back empty.
+        self.required_history_days = self._cfg.min_list_days + 60
 
     @property
     def strategy_id(self) -> str:

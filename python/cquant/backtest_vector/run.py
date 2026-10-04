@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -82,7 +82,13 @@ def _forward_fill_long_prices(prices: pl.DataFrame) -> pl.DataFrame:
     # Reindex: full (asset × all_dates) grid. Missing rows become NULL close.
     grid = assets.join(all_dates, how="cross")
     reindexed = grid.join(
-        prices.select(["asset_id", "trade_date", "close"]),
+        # Join FULL original rows — open/high/low/volume/amount/is_suspended
+        # must survive the reindex or every OHLCV consumer downstream breaks
+        # (BreakoutPullback reads hist["open"] per asset and died with
+        # ColumnNotFoundError when only close was carried). Grid rows without
+        # a real observation become NULL in every column; only close is
+        # forward-filled below.
+        prices,
         on=["asset_id", "trade_date"],
         how="left",
     )
@@ -226,6 +232,9 @@ class BacktestRunSpec:
     entry_conditions: list[str] = field(default_factory=list)
     exit_conditions: list[str] = field(default_factory=list)
     indicator_specs: list[dict] = field(default_factory=list)
+    # Warmup trading days prepended to the price window for strategy
+    # context (WF folds). 0 = infer from Strategy.required_history_days.
+    warmup_days: int = 0
     # MultiFactor missing-factor handling
     missing_factor_strategy: str = "fill_0"
     penalty_per_missing: float = 0.5
@@ -434,10 +443,6 @@ class BacktestRunner:
 
     def _run_single(self, spec: BacktestRunSpec) -> str:
         """Run a single backtest (existing logic extracted)."""
-        prices = self._load_prices(spec)
-        if prices.is_empty():
-            raise ValueError(f"No price data for {spec.start_date} to {spec.end_date}")
-
         features = self._load_features(spec)
 
         # When using scoring results, auto-set sort_factor to 'score'
@@ -446,6 +451,16 @@ class BacktestRunner:
             spec = replace(spec, sort_factor="score")
 
         strategy = self._build_strategy(spec)
+
+        # Warmup: strategies with a history gate (e.g. BreakoutPullback's
+        # min_list_days+60) need pre-window rows when the window itself is
+        # shorter than the lookback — WF fold backtests. Explicit
+        # spec.warmup_days wins; otherwise infer from the strategy.
+        warmup = spec.warmup_days or getattr(strategy, "required_history_days", 0)
+        prices = self._load_prices(spec, warmup_days=warmup)
+        if prices.is_empty():
+            raise ValueError(f"No price data for {spec.start_date} to {spec.end_date}")
+
         cost_model = self._detect_cost_model(prices)
 
         # DSL: position.method → sizer 自动挂载；risk 段在调用方未显式传
@@ -474,6 +489,7 @@ class BacktestRunner:
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
             regime_sm=regime_sm,
+            warmup_days=warmup,
         )
 
         result = self._engine.run(bt_spec)
@@ -901,7 +917,10 @@ class BacktestRunner:
             tags=tags or {},
         )
 
-        prices = self._load_prices(persist_spec)
+        warmup = persist_spec.warmup_days or getattr(
+            strategy, "required_history_days", 0
+        )
+        prices = self._load_prices(persist_spec, warmup_days=warmup)
         if prices.is_empty():
             raise ValueError(f"No price data for {start_date} to {end_date}")
 
@@ -920,6 +939,7 @@ class BacktestRunner:
             random_seed=persist_spec.random_seed,
             # B1 装配：DSL 策略含 regime 段时挂载状态机（无 regime 保持 None）
             regime_sm=self._regime_sm_for_strategy(strategy),
+            warmup_days=warmup,
         )
 
         result = self._engine.run(bt_spec)
@@ -1041,12 +1061,21 @@ class BacktestRunner:
             return {}
         return compute_win_rates_from_fills(fills, min_trades=min_trades)
 
-    def _load_prices(self, spec: BacktestRunSpec) -> pl.DataFrame:
+    def _load_prices(self, spec: BacktestRunSpec, warmup_days: int = 0) -> pl.DataFrame:
         from cquant.backtest_vector.prices import adjusted_ohlc_sql
         from cquant.backtest_vector.universe import resolve_universe
 
         universe_id = getattr(spec, 'universe_id', None) or "all"
         asset_ids = resolve_universe(self._catalog, universe_id)
+
+        # Warmup prefix: fetch extra calendar days before start_date so the
+        # engine can hand the strategy `warmup_days` TRADING days of history
+        # (1.6x calendar buffer + slack; engine trims the exact count).
+        load_start = spec.start_date
+        if warmup_days > 0:
+            load_start = spec.start_date - timedelta(
+                days=int(warmup_days * 1.6) + 10
+            )
 
         # Shared helper returns fully-adjusted OHLC (close = adj_close or
         # close × adj_factor). Engine still reads values="close", but that
@@ -1056,7 +1085,7 @@ class BacktestRunner:
             adjusted_ohlc_sql()
             + " WHERE trade_date >= ? AND trade_date <= ?"
         )
-        params: list = [spec.start_date.isoformat(), spec.end_date.isoformat()]
+        params: list = [load_start.isoformat(), spec.end_date.isoformat()]
 
         if asset_ids is not None:
             if not asset_ids:

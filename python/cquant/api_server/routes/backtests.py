@@ -14,7 +14,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from cquant.api_server.deps import CatalogDep, KBServiceDep, run_job_async
@@ -1105,6 +1105,82 @@ async def get_backtest_analysis(run_id: str, catalog: CatalogDep) -> dict:
     if df.is_empty():
         raise HTTPException(status_code=404, detail=f"No analysis found for run '{run_id}'")
     return df.to_dicts()[0]
+
+
+@router.get("/{run_id}/attribution")
+async def get_backtest_attribution(run_id: str, catalog: CatalogDep) -> dict:
+    """Get Brinson attribution for the latest analysis run of a backtest.
+
+    三态 404（body 为 ``{"reason": ...}``，按判定顺序逐级）：
+    - ``run_not_found``   — gold_backtest_runs 无此 run
+    - ``no_analysis_run`` — run 存在但无分析记录
+    - ``no_attribution``  — 最新 analysis run 无归因行（无 benchmark / 无行业
+      映射时分析器不产归因）；旧数据 daily_json / sector_details_json 畸形
+      亦按此态降级（log warning，绝不 500）。
+    """
+    run_df = catalog.query(
+        "SELECT run_id FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+    )
+    if run_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "run_not_found"})
+
+    analysis_df = catalog.query(
+        "SELECT analysis_run_id FROM gold_bt_analysis_runs "
+        "WHERE backtest_run_id = ? ORDER BY created_at DESC LIMIT 1",
+        [run_id],
+    )
+    if analysis_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "no_analysis_run"})
+
+    analysis_run_id = analysis_df["analysis_run_id"][0]
+    attr_df = catalog.query(
+        "SELECT * FROM gold_bt_attribution WHERE analysis_run_id = ?",
+        [analysis_run_id],
+    )
+    if attr_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "no_attribution"})
+
+    row = attr_df.to_dicts()[0]
+
+    def _parse_json_column(raw, column: str):
+        # 旧数据畸形 JSON → 按 no_attribution 降级（防御性解析，不许 500）
+        if raw is None:
+            return []
+        if isinstance(raw, (list, dict)):
+            return raw
+        try:
+            return json.loads(str(raw))
+        except (ValueError, TypeError):
+            logger.warning(
+                "Malformed %s for analysis run %s — treating as no_attribution",
+                column, analysis_run_id,
+            )
+            return None
+
+    periods = _parse_json_column(row.get("daily_json"), "daily_json")
+    sectors_raw = _parse_json_column(row.get("sector_details_json"), "sector_details_json")
+    if periods is None or sectors_raw is None:
+        return JSONResponse(status_code=404, content={"reason": "no_attribution"})
+    # sector_details 持久化为 {sector: metrics} 对象；列表化便于前端渲染
+    sectors = (
+        [{"sector": name, **metrics} for name, metrics in sorted(sectors_raw.items())]
+        if isinstance(sectors_raw, dict)
+        else sectors_raw
+    )
+
+    return {
+        "analysis_run_id": analysis_run_id,
+        "summary": {
+            "total_return": row.get("total_return"),
+            "benchmark_return": row.get("benchmark_return"),
+            "active_return": row.get("active_return"),
+            "allocation": row.get("allocation_effect"),
+            "selection": row.get("selection_effect"),
+            "interaction": row.get("interaction_effect"),
+        },
+        "periods": periods,
+        "sectors": sectors,
+    }
 
 
 @router.get("/{run_id}/risk")

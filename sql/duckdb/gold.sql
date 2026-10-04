@@ -185,3 +185,17 @@ CREATE TABLE IF NOT EXISTS gold_research_reports (
     content_md  VARCHAR NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL
 );
+
+-- ── Per-asset positions (B4a) ─────────────────────────────────────────────────
+-- Point-in-time target weights per (run, date, asset). Consumed by the
+-- correlation / factor-exposure / risk-contribution endpoints.
+CREATE TABLE IF NOT EXISTS gold_positions (
+    run_id     VARCHAR NOT NULL,
+    trade_date DATE NOT NULL,
+    asset_id   VARCHAR NOT NULL,
+    weight     DOUBLE,
+    PRIMARY KEY (run_id, trade_date, asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gold_positions_run
+    ON gold_positions (run_id, trade_date);

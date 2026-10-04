@@ -1497,7 +1497,15 @@ class BacktestRunner:
             self._mark_fills_persist_failure(run_id, exc)
 
     def _mark_fills_persist_failure(self, run_id: str, exc: Exception) -> None:
-        """Stamp ``fills_persisted=false`` + error summary into the run's tags.
+        """Stamp ``fills_persisted=false`` + error summary into the run's tags."""
+        self._mark_persist_failure(run_id, exc, "fills_persisted", "fills_error")
+
+    def _mark_persist_failure(
+        self, run_id: str, exc: Exception, flag: str, error_key: str
+    ) -> None:
+        """Stamp ``<flag>=false`` + error summary into the run's tags.
+
+        Shared by the fills / positions persistence failure paths.
 
         Defensive on legacy tags values: if the existing tags column holds
         non-dict JSON (a bare string/array — e.g. written by an older
@@ -1528,15 +1536,15 @@ class BacktestRunner:
                             legacy_value = str(raw)
             if legacy_value is not None:
                 tags["tags_legacy"] = legacy_value
-            tags["fills_persisted"] = False
-            tags["fills_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            tags[flag] = False
+            tags[error_key] = f"{type(exc).__name__}: {exc}"[:500]
             self._catalog.execute(
                 "UPDATE gold_backtest_runs SET tags = ? WHERE run_id = ?",
                 [json.dumps(tags), run_id],
             )
         except Exception as mark_exc:
             logger.error(
-                "Failed to stamp fills_persisted=false for run %s: %s", run_id, mark_exc
+                "Failed to stamp %s=false for run %s: %s", flag, run_id, mark_exc
             )
 
     def _persist_portfolio_snapshots(self, result, run_id: str) -> None:
@@ -1608,9 +1616,53 @@ class BacktestRunner:
             logger.warning("Failed to persist portfolio snapshots: %s", exc)
 
     def _persist_positions(self, result, run_id: str) -> None:
-        """Write portfolio positions to gold_risk_snapshots as point-in-time snapshots."""
+        """Write per-asset positions + risk snapshots.
+
+        Two sinks:
+        - ``gold_positions``: per-asset point-in-time target weights
+          (consumed by the correlation / factor-exposure / risk-contribution
+          endpoints). Idempotent on (run_id, trade_date, asset_id).
+        - ``gold_risk_snapshots``: per-date aggregate risk snapshot
+          (leverage / beta / drawdown / VaR / CVaR).
+
+        Failures are surfaced (error log + ``positions_persisted=false``
+        stamped into the run's tags) instead of being swallowed at warning
+        level.
+        """
         if result.portfolio_returns.is_empty():
             return
+
+        # Per-asset positions — engine weights_df columns:
+        # [trade_date, asset_id, target_weight].
+        if not result.positions.is_empty():
+            try:
+                pos_rows = [
+                    (
+                        run_id,
+                        str(row["trade_date"]),
+                        row["asset_id"],
+                        float(row["target_weight"])
+                        if row.get("target_weight") is not None else None,
+                    )
+                    for row in result.positions.iter_rows(named=True)
+                ]
+                self._catalog.upsert(
+                    "gold_positions",
+                    ["run_id", "trade_date", "asset_id", "weight"],
+                    pos_rows,
+                    ["run_id", "trade_date", "asset_id"],
+                )
+                logger.info(
+                    "Persisted %d positions to gold_positions", len(pos_rows)
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to persist %d positions to gold_positions for run %s: %s",
+                    result.positions.height, run_id, exc, exc_info=True,
+                )
+                self._mark_persist_failure(
+                    run_id, exc, "positions_persisted", "positions_error"
+                )
 
         # Get benchmark returns for beta calculation
         benchmark_returns = _extract_benchmark_returns(result.spec)
@@ -1706,7 +1758,14 @@ class BacktestRunner:
             )
             logger.info("Persisted %d risk snapshots", len(rows))
         except Exception as exc:
-            logger.warning("Failed to persist risk snapshots: %s", exc)
+            logger.error(
+                "Failed to persist %d risk snapshots to gold_risk_snapshots "
+                "for run %s: %s",
+                len(rows), run_id, exc, exc_info=True,
+            )
+            self._mark_persist_failure(
+                run_id, exc, "positions_persisted", "positions_error"
+            )
 
     def _persist_rolling_risk_metrics(self, result, run_id: str) -> None:
         """Compute and persist rolling risk metrics for multiple windows."""

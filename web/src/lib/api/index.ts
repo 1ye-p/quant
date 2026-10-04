@@ -37,6 +37,10 @@ export type {
   WalkForwardConfig,
   BacktestRun,
   BacktestFill,
+  BacktestAttribution,
+  AttributionSummary,
+  AttributionPeriod,
+  AttributionSector,
 } from './backtests'
 
 export { mlApi } from './ml'

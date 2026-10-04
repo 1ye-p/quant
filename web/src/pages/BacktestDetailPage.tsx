@@ -16,6 +16,7 @@ const TABS: TabDef[] = [
   { id: 'overfitting', path: 'overfitting' },
   { id: 'fills', path: 'fills' },
   { id: 'walkforward', path: 'walkforward' },
+  { id: 'attribution', path: 'attribution' },
   { id: 'tca', path: 'tca' },
   { id: 'risk', path: 'risk' },
   { id: 'calendar', path: 'calendar' },

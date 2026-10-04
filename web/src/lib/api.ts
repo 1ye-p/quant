@@ -45,6 +45,10 @@ export type {
   WalkForwardConfig,
   BacktestRun,
   BacktestFill,
+  BacktestAttribution,
+  AttributionSummary,
+  AttributionPeriod,
+  AttributionSector,
 } from './api/backtests'
 
 export { knowledgeApi } from './api/knowledge'

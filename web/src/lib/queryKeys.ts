@@ -15,6 +15,7 @@ export const queryKeys = {
     list: (params?: Record<string, unknown>) => ['backtests', 'list', params] as const,
     detail: (id: string) => ['backtests', id] as const,
     analysis: (id: string) => ['backtests', id, 'analysis'] as const,
+    attribution: (id: string) => ['backtests', id, 'attribution'] as const,
     risk: (id: string) => ['backtests', id, 'risk'] as const,
     tearsheet: (id: string) => ['backtests', id, 'tearsheet'] as const,
     validationWindows: (id: string) => ['backtests', id, 'validation-windows'] as const,

@@ -226,6 +226,14 @@ export const backtestsApi = {
       config,
     ),
 
+  /**
+   * Brinson attribution for the latest analysis run (B1).
+   * Tri-state 404 with body `{reason: "run_not_found" | "no_analysis_run" | "no_attribution"}` —
+   * inspect via `ApiError.details.reason` on status 404.
+   */
+  getAttribution: (id: string, config?: RequestConfig) =>
+    api.get<BacktestAttribution>(`/backtests/${id}/attribution`, config),
+
   /** Multi-dimensional strategy ranking across runs (T7). */
   rank: (
     body: { run_ids: string[]; weights?: Record<string, number> },
@@ -253,6 +261,41 @@ export interface BacktestResearchReport {
   run_id: string
   content_md: string
   created_at: string
+}
+
+// ── Brinson attribution types (B1) ───────────────────────────────────────────
+
+export interface AttributionSummary {
+  total_return: number | null
+  benchmark_return: number | null
+  active_return: number | null
+  allocation: number | null
+  selection: number | null
+  interaction: number | null
+}
+
+/** Rebalance-period Brinson effects (backend field `daily` kept as-is). */
+export interface AttributionPeriod {
+  date: string
+  allocation: number
+  selection: number
+  interaction: number
+}
+
+/** Per-sector weights/returns; effects are derived client-side (Brinson-Fachler). */
+export interface AttributionSector {
+  sector: string
+  port_weight?: number
+  bench_weight?: number
+  port_return?: number
+  bench_return?: number
+}
+
+export interface BacktestAttribution {
+  analysis_run_id: string
+  summary: AttributionSummary
+  periods: AttributionPeriod[]
+  sectors: AttributionSector[]
 }
 
 // ── Regime timeline / ranking types ─────────────────────────────────────────

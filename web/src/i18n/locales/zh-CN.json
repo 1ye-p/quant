@@ -2452,7 +2452,8 @@
         "model-diagnostics": "模型诊断",
         "trade-analysis": "交易分析",
         "regime_timeline": "Regime 时间线",
-        "report": "AI 研报"
+        "report": "AI 研报",
+        "attribution": "归因"
       },
       "no_benchmark_hint": "未设置基准",
       "validation": {
@@ -2572,6 +2573,34 @@
         "col_scale": "目标仓位",
         "col_days": "天数",
         "col_return": "区间收益"
+      },
+      "attribution": {
+        "summary_title": "Brinson 归因总览",
+        "total_return": "总收益",
+        "benchmark_return": "基准收益",
+        "active_return": "超额收益",
+        "allocation": "配置效应",
+        "selection": "选股效应",
+        "interaction": "交互效应",
+        "sectors_title": "分行业明细",
+        "sectors_empty": "无行业映射数据",
+        "col_sector": "行业",
+        "col_allocation": "配置效应",
+        "col_selection": "选股效应",
+        "col_interaction": "交互效应",
+        "col_total": "合计贡献",
+        "col_date": "日期",
+        "periods_title": "分期明细",
+        "periods_note": "按再平衡段粒度展示（字段名 daily 为后端历史保留）",
+        "periods_empty": "无分期归因数据",
+        "reason": {
+          "run_not_found": "回测运行不存在",
+          "run_not_found_hint": "该运行 ID 无效或已被清理，请从回测列表重新进入。",
+          "no_analysis_run": "该回测尚未运行分析套件",
+          "no_analysis_run_hint": "先在详情页触发分析套件（含 Brinson 归因），完成后再回到本页。",
+          "no_attribution": "无基准或无行业映射，未产生归因",
+          "no_attribution_hint": "分析器未生成归因结果（策略无基准或缺少行业映射），归因数据可能因存量写侧缺陷缺失，后续版本修复。"
+        }
       }
     },
     "knowledge": {

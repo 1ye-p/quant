@@ -2452,7 +2452,8 @@
         "model-diagnostics": "Model Diagnostics",
         "trade-analysis": "Trade Analysis",
         "regime_timeline": "Regime Timeline",
-        "report": "AI Report"
+        "report": "AI Report",
+        "attribution": "Attribution"
       },
       "no_benchmark_hint": "No benchmark set",
       "validation": {
@@ -2572,6 +2573,34 @@
         "col_scale": "Desired scale",
         "col_days": "Days",
         "col_return": "Interval return"
+      },
+      "attribution": {
+        "summary_title": "Brinson Attribution Overview",
+        "total_return": "Total Return",
+        "benchmark_return": "Benchmark Return",
+        "active_return": "Active Return",
+        "allocation": "Allocation",
+        "selection": "Selection",
+        "interaction": "Interaction",
+        "sectors_title": "Sector Detail",
+        "sectors_empty": "No sector mapping data",
+        "col_sector": "Sector",
+        "col_allocation": "Allocation",
+        "col_selection": "Selection",
+        "col_interaction": "Interaction",
+        "col_total": "Total Contribution",
+        "col_date": "Date",
+        "periods_title": "Period Detail",
+        "periods_note": "Rebalance-period granularity (field name 'daily' kept from backend)",
+        "periods_empty": "No period attribution data",
+        "reason": {
+          "run_not_found": "Backtest run not found",
+          "run_not_found_hint": "This run ID is invalid or has been purged. Re-enter from the backtests list.",
+          "no_analysis_run": "The analysis suite has not been run for this backtest",
+          "no_analysis_run_hint": "Trigger the analysis suite (includes Brinson attribution) from the detail page first, then return here.",
+          "no_attribution": "No attribution produced (no benchmark or no sector mapping)",
+          "no_attribution_hint": "The analyzer produced no attribution (strategy has no benchmark or lacks sector mapping). Data may also be missing due to a known write-side defect; a fix is planned."
+        }
       }
     },
     "knowledge": {

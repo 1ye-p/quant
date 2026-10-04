@@ -638,6 +638,15 @@ class VectorBacktestEngine:
                         except Exception as _exc:
                             logger.warning("Optimizer skipped for %s: %s", td, _exc)
 
+                # B2 fix: snapshot holdings BEFORE regime evaluation /
+                # de-risk clearing so prev reflects the true pre-transition
+                # portfolio. Both consumers (signal-detail prev_weights and
+                # the turnover estimate) want the pre-transformation state;
+                # previously the regime block's `del committed_weights[aid]`
+                # erased scale-0 exits from prev entirely (never classified
+                # as exit rows, and their sell turnover was under-counted).
+                old_weights = committed_weights.copy() if committed_weights else {}
+
                 # Regime scaling (P3S-2, checklist #1): applied after the
                 # optimizer and BEFORE pre-trade risk checks, so policies
                 # see the de-risked targets.
@@ -717,9 +726,6 @@ class VectorBacktestEngine:
                         price_matrix=price_matrix,
                     )
                     pretrade_decisions.extend(decisions)
-
-                # Save old weights for turnover calculation
-                old_weights = committed_weights.copy() if committed_weights else {}
 
                 # Update committed weights
                 if weights_dict:

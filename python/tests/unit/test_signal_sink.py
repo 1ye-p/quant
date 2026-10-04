@@ -376,3 +376,88 @@ class TestMissingFactorsTag:
         )
         tags = _tags(catalog, "run_nomf")
         assert "signals_missing_factors" not in tags
+
+
+# ── 7: regime scale-0 全清仓日 exit 可见（prev 快照前移） ────────────────────
+
+class _ScriptedRegime:
+    """date → position_scale（复刻 test_regime_engine.ScriptedRegime 最小形态）。"""
+
+    def __init__(self, scales: dict[date, float]) -> None:
+        from cquant.strategy_dsl.regime import RegimeResult
+        self._RegimeResult = RegimeResult
+        self._scales = scales
+
+    def evaluate(self, as_of_date: date):
+        scale = self._scales.get(as_of_date, 1.0)
+        return self._RegimeResult(
+            position_scale=scale, state="scripted", as_of_date=as_of_date,
+        )
+
+
+class _RegimeDetailStrategy(_DetailStrategy):
+    """带打分明细的 buy-and-hold（买入 A0/A1，截面含 A0-A2 打分）。"""
+
+    def generate_signals(self, ctx: StrategyContext) -> pl.DataFrame:
+        _DetailStrategy.generate_signals(self, ctx)
+        return pl.DataFrame({
+            "asset_id": ["A0", "A1"],
+            "signal_date": [ctx.as_of_date] * 2,
+            "direction": ["long"] * 2,
+            "strength": [1.0, 1.0],
+            "confidence": [1.0, 1.0],
+        })
+
+
+def _june_prices(days: int = 14) -> pl.DataFrame:
+    """2025-06-02（周一）起的 A0/A1/A2 价格帧。"""
+    rows = []
+    start = date(2025, 6, 2)
+    for i in range(days):
+        d = start + timedelta(days=i)
+        for a, base in (("A0", 10.0), ("A1", 20.0), ("A2", 30.0)):
+            p = base * (1 + 0.001 * i)
+            rows.append({
+                "trade_date": d, "asset_id": a,
+                "open": p, "high": p * 1.01, "low": p * 0.99,
+                "close": p, "volume": 1e6, "amount": p * 1e6,
+                "is_suspended": False,
+            })
+    return pl.DataFrame(rows)
+
+
+class TestRegimeForceExitVisibility:
+    START = date(2025, 6, 2)          # Monday
+    DERISK = date(2025, 6, 9)         # next weekly rebalance: scale 0 → full clear
+
+    def _run(self):
+        strat = _RegimeDetailStrategy()
+        spec = BacktestSpec(
+            strategy=strat,
+            prices=_june_prices(),
+            start_date=self.START,
+            end_date=self.START + timedelta(days=13),
+            initial_cash=Decimal("100000"),
+            rebalance_frequency="1w",
+            regime_sm=_ScriptedRegime({self.DERISK: 0.0}),
+        )
+        return VectorBacktestEngine().run(spec)
+
+    def test_regime_force_exits_classified_as_exit(self) -> None:
+        result = self._run()
+        rec = next(r for r in result.signal_details if r["trade_date"] == self.DERISK)
+        # prev = 清仓前真实持仓；new = 清仓后（空仓）
+        assert set(rec["prev_weights"]) == {"A0", "A1"}
+        assert all(w > 0 for w in rec["prev_weights"].values())
+        assert rec["new_weights"] == {}
+        # 分类侧：exit 行（prev_weight=清仓前权重、new_weight=0），非 candidate/缺行
+        # 行结构: (run_id, trade_date, asset_id, score, rank, action,
+        #          prev_weight, new_weight, factor_scores_json)
+        rows = BacktestRunner._signal_detail_rows(rec, "run_x", 5)
+        by_asset = {r[2]: r for r in rows}
+        assert set(by_asset) >= {"A0", "A1"}
+        for aid in ("A0", "A1"):
+            row = by_asset[aid]
+            assert row[5] == "exit", f"{aid} should be exit, got {row[5]}"
+            assert row[6] == pytest.approx(rec["prev_weights"][aid])
+            assert row[7] == 0.0

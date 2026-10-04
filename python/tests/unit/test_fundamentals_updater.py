@@ -61,6 +61,51 @@ class TestUpdateFundamentals:
         assert result == 1  # first failed, second succeeded
 
 
+class TestAkshareAnnounceDate:
+    """akshare 路径 announce_date 必须按 D4-A 固定披露截止日推导（> report_date）。"""
+
+    @pytest.mark.parametrize(
+        "report_date, expected_announce",
+        [
+            ("2025-03-31", "2025-04-30"),
+            ("2025-06-30", "2025-08-31"),
+            ("2025-09-30", "2025-10-31"),
+            ("2024-12-31", "2025-04-30"),
+        ],
+    )
+    def test_announce_date_uses_fixed_deadline(self, report_date, expected_announce) -> None:
+        import sys
+        from types import ModuleType
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from cquant.datahub.pipelines import fundamentals_updater as fu
+
+        fake_ak = ModuleType("akshare")
+        fake_ak.stock_financial_abstract = lambda symbol: pd.DataFrame(
+            {"item": ["净资产收益率"], "value": ["12.5%"]}
+        )
+
+        captured: dict = {}
+
+        def fake_upsert(_catalog, records, _updated_at):
+            captured["records"] = records
+            return len(records)
+
+        with patch.dict(sys.modules, {"akshare": fake_ak}), patch.object(
+            fu, "_upsert_records", side_effect=fake_upsert
+        ):
+            n = fu._update_from_akshare(
+                MagicMock(), ["SSE:600036"], report_date, "2025-05-01T00:00:00+00:00"
+            )
+
+        assert n == 1
+        row = captured["records"][0]
+        assert row["announce_date"] == expected_announce
+        assert row["announce_date"] > row["report_date"]
+
+
 class TestRegisterFundamentalsJob:
     def test_registers_job_with_scheduler(self) -> None:
         from cquant.datahub.pipelines.fundamentals_updater import register_fundamentals_job

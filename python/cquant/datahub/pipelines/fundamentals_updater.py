@@ -15,6 +15,8 @@ import logging
 from datetime import date, datetime, time, timezone
 from typing import TYPE_CHECKING
 
+from cquant.datahub.pipelines.announce_backfill import derive_conservative_announce
+
 if TYPE_CHECKING:
     from cquant.datahub.catalog import Catalog
     from cquant.scheduler import StrategyScheduler
@@ -128,9 +130,11 @@ def _update_from_akshare(
         row["asset_id"] = asset_id
         row["report_date"] = report_date
         row["source"] = "akshare"
-        # akshare 的 stock_financial_abstract 不返回实际披露日 (ann_date)，
-        # 保守地用 report_date 充当 announce_date，保证 PIT 列非 NULL。
-        row["announce_date"] = report_date
+        # akshare 的 stock_financial_abstract 不返回实际披露日 (ann_date)。
+        # D4-A 决议：按法定披露截止日推导 announce_date（保守、无前视）。
+        row["announce_date"] = derive_conservative_announce(
+            date.fromisoformat(report_date)
+        ).isoformat()
         records.append(row)
 
     if not records:

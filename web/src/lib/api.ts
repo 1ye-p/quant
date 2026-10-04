@@ -49,6 +49,9 @@ export type {
   AttributionSummary,
   AttributionPeriod,
   AttributionSector,
+  BacktestSignalDates,
+  BacktestSignalItem,
+  BacktestSignalDetailsPage,
 } from './api/backtests'
 
 export { knowledgeApi } from './api/knowledge'

@@ -1183,6 +1183,118 @@ async def get_backtest_attribution(run_id: str, catalog: CatalogDep) -> dict:
     }
 
 
+#: Strategy types whose runs can carry gold_bt_signal_details rows (B2).
+#: StaticTopN / ML / neutral etc. never expose per-factor score detail.
+_SIGNAL_DETAIL_STRATEGY_TYPES = {"DSL", "MultiFactor", "Combo"}
+
+
+@router.get("/{run_id}/signals")
+async def get_backtest_signals(
+    run_id: str,
+    catalog: CatalogDep,
+    date: str | None = Query(default=None),
+    page: int = Query(default=0, ge=0),
+    page_size: int = Query(default=50, ge=1, le=500),
+) -> dict:
+    """Get per-rebalance signal details for a backtest run (B2).
+
+    双语义（``date`` 参数二态）：
+    - 无 ``date``  → 调仓日列表 ``{dates: [...], total}``（DISTINCT
+      trade_date，只取自 gold_bt_signal_details 本表——数据自洽）。
+    - 有 ``date``  → 该日明细 ``{items, total, page, page_size}``，rank
+      升序、NULL rank 最后；``factor_scores_json`` 解析为 dict（畸形
+      JSON 降级为 ``{}`` 并 log warning，绝不 500）。
+
+    404 判定顺序（body 为 ``{"reason": ...}``）：
+    - ``run_not_found``            — gold_backtest_runs 无此 run
+    - ``unsupported_strategy_type`` — run 的 strategy_type 不在
+      DSL/MultiFactor/Combo 白名单（先查类型再查明细行）
+    - ``no_signal_details``        — 类型支持但明细表无行（旧 run / 落盘失败）
+    """
+    run_df = catalog.query(
+        "SELECT strategy_type, strategy_id FROM gold_backtest_runs "
+        "WHERE run_id = ?",
+        [run_id],
+    )
+    if run_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "run_not_found"})
+
+    strategy_type = run_df["strategy_type"][0] or ""
+    if not strategy_type:
+        # Pre-migration runs: fall back to the saved strategy config
+        # (same precedence as get_backtest).
+        strategy_type = _infer_strategy_type(catalog, run_df["strategy_id"][0] or "")
+    if strategy_type not in _SIGNAL_DETAIL_STRATEGY_TYPES:
+        return JSONResponse(
+            status_code=404, content={"reason": "unsupported_strategy_type"}
+        )
+
+    if date is None:
+        dates_df = catalog.query(
+            "SELECT DISTINCT trade_date FROM gold_bt_signal_details "
+            "WHERE run_id = ? ORDER BY trade_date",
+            [run_id],
+        )
+        if dates_df.is_empty():
+            return JSONResponse(status_code=404, content={"reason": "no_signal_details"})
+        dates = [str(d) for d in dates_df["trade_date"].to_list()]
+        return {"dates": dates, "total": len(dates)}
+
+    count_df = catalog.query(
+        "SELECT COUNT(*) AS cnt FROM gold_bt_signal_details "
+        "WHERE run_id = ? AND trade_date = ?",
+        [run_id, date],
+    )
+    total = count_df["cnt"].item() if not count_df.is_empty() else 0
+    if total == 0:
+        # 明细表完全无行 → no_signal_details；有其他日期行但本日无数据 → 空列表
+        any_df = catalog.query(
+            "SELECT 1 AS one FROM gold_bt_signal_details WHERE run_id = ? LIMIT 1",
+            [run_id],
+        )
+        if any_df.is_empty():
+            return JSONResponse(status_code=404, content={"reason": "no_signal_details"})
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}
+
+    df = catalog.query(
+        "SELECT asset_id, score, rank, action, prev_weight, new_weight, "
+        "factor_scores_json FROM gold_bt_signal_details "
+        "WHERE run_id = ? AND trade_date = ? "
+        "ORDER BY rank ASC NULLS LAST LIMIT ? OFFSET ?",
+        [run_id, date, page_size, page * page_size],
+    )
+
+    def _parse_factor_scores(raw) -> dict:
+        # 防御性解析：畸形 JSON → {}（log warning，不许 500）
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            parsed = json.loads(str(raw))
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            logger.warning(
+                "Malformed factor_scores_json for run %s %s — returning {}",
+                run_id, date,
+            )
+            return {}
+
+    items = [
+        {
+            "asset_id": row["asset_id"],
+            "score": row["score"],
+            "rank": row["rank"],
+            "action": row["action"],
+            "prev_weight": row["prev_weight"],
+            "new_weight": row["new_weight"],
+            "factor_scores": _parse_factor_scores(row["factor_scores_json"]),
+        }
+        for row in df.iter_rows(named=True)
+    ]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 @router.get("/{run_id}/risk")
 async def get_backtest_risk(run_id: str, catalog: CatalogDep, limit: int = 20) -> dict:
     """Get risk snapshots for a backtest run."""

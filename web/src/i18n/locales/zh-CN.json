@@ -2453,7 +2453,8 @@
         "trade-analysis": "交易分析",
         "regime_timeline": "Regime 时间线",
         "report": "AI 研报",
-        "attribution": "归因"
+        "attribution": "归因",
+        "signals": "信号"
       },
       "no_benchmark_hint": "未设置基准",
       "validation": {
@@ -2573,6 +2574,35 @@
         "col_scale": "目标仓位",
         "col_days": "天数",
         "col_return": "区间收益"
+      },
+      "signals": {
+        "reason": {
+          "run_not_found": "回测运行不存在",
+          "run_not_found_hint": "该运行 ID 无效或已被清理，请从回测列表重新进入。",
+          "no_signal_details": "该回测无信号明细",
+          "no_signal_details_hint": "为旧版本运行或明细落盘失败；新运行将自动记录每个调仓日的打分明细。",
+          "unsupported_strategy_type": "该策略类型不产生信号明细",
+          "unsupported_strategy_type_hint": "信号明细仅支持 DSL / 多因子 / 组合策略（含分项因子打分）。"
+        },
+        "date_label": "调仓日",
+        "dates_count": "共 {{total}} 个调仓日",
+        "empty": "该日无信号明细",
+        "col_rank": "排名",
+        "col_asset": "代码",
+        "col_score": "总分",
+        "col_action": "动作",
+        "col_prev_weight": "旧权重",
+        "col_new_weight": "新权重",
+        "action": {
+          "enter": "买入",
+          "hold": "持有",
+          "exit": "退出",
+          "candidate": "候选"
+        },
+        "missing_factors_title": "部分因子未物化",
+        "missing_factors_hint": "以下因子在回测区间无已物化数据，打分时已跳过：",
+        "persist_failed_title": "信号明细落盘失败",
+        "persist_failed_hint": "本次回测未持久化信号明细（回测结果本身不受影响）。"
       },
       "attribution": {
         "summary_title": "Brinson 归因总览",

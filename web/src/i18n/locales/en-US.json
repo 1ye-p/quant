@@ -2453,7 +2453,8 @@
         "trade-analysis": "Trade Analysis",
         "regime_timeline": "Regime Timeline",
         "report": "AI Report",
-        "attribution": "Attribution"
+        "attribution": "Attribution",
+        "signals": "Signals"
       },
       "no_benchmark_hint": "No benchmark set",
       "validation": {
@@ -2573,6 +2574,35 @@
         "col_scale": "Desired scale",
         "col_days": "Days",
         "col_return": "Interval return"
+      },
+      "signals": {
+        "reason": {
+          "run_not_found": "Backtest run not found",
+          "run_not_found_hint": "This run ID is invalid or has been cleaned up. Re-enter from the backtests list.",
+          "no_signal_details": "No signal details for this run",
+          "no_signal_details_hint": "The run predates signal-detail persistence or persistence failed; new runs record per-rebalance score details automatically.",
+          "unsupported_strategy_type": "This strategy type does not produce signal details",
+          "unsupported_strategy_type_hint": "Signal details are available for DSL / MultiFactor / Combo strategies only (they carry per-factor scores)."
+        },
+        "date_label": "Rebalance date",
+        "dates_count": "{{total}} rebalance dates",
+        "empty": "No signal details for this date",
+        "col_rank": "Rank",
+        "col_asset": "Asset",
+        "col_score": "Score",
+        "col_action": "Action",
+        "col_prev_weight": "Prev weight",
+        "col_new_weight": "New weight",
+        "action": {
+          "enter": "Enter",
+          "hold": "Hold",
+          "exit": "Exit",
+          "candidate": "Candidate"
+        },
+        "missing_factors_title": "Some factors are not materialized",
+        "missing_factors_hint": "The following factors had no materialized data in the backtest window and were skipped during scoring:",
+        "persist_failed_title": "Signal detail persistence failed",
+        "persist_failed_hint": "Signal details were not persisted for this run (backtest results are unaffected)."
       },
       "attribution": {
         "summary_title": "Brinson Attribution Overview",

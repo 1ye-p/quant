@@ -21,6 +21,7 @@ const BacktestComparePage = named(() => import('@/pages/BacktestComparePage'), '
 const BacktestOverviewTab = named(() => import('@/pages/backtest-tabs/BacktestOverviewTab'), 'BacktestOverviewTab')
 const BacktestTearsheetTab = named(() => import('@/pages/backtest-tabs/BacktestTearsheetTab'), 'BacktestTearsheetTab')
 const BacktestOverfittingTab = named(() => import('@/pages/backtest-tabs/BacktestOverfittingTab'), 'BacktestOverfittingTab')
+const BacktestSignalsTab = named(() => import('@/pages/backtest-tabs/BacktestSignalsTab'), 'BacktestSignalsTab')
 const BacktestFillsTab = named(() => import('@/pages/backtest-tabs/BacktestFillsTab'), 'BacktestFillsTab')
 const BacktestWalkForwardTab = named(() => import('@/pages/backtest-tabs/BacktestWalkForwardTab'), 'BacktestWalkForwardTab')
 const BacktestTcaTab = named(() => import('@/pages/backtest-tabs/BacktestTcaTab'), 'BacktestTcaTab')
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
             children: [
               { index: true, element: <BacktestOverviewTab /> },
               { path: 'tearsheet', element: <BacktestTearsheetTab /> },
+              { path: 'signals', element: <BacktestSignalsTab /> },
               { path: 'overfitting', element: <BacktestOverfittingTab /> },
               { path: 'fills', element: <BacktestFillsTab /> },
               { path: 'walkforward', element: <BacktestWalkForwardTab /> },

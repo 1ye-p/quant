@@ -234,6 +234,29 @@ export const backtestsApi = {
   getAttribution: (id: string, config?: RequestConfig) =>
     api.get<BacktestAttribution>(`/backtests/${id}/attribution`, config),
 
+  /**
+   * Rebalance dates with persisted signal details (B2). Same endpoint as
+   * getSignalDetails without `date`. 404 body `{reason}` — tri-state.
+   */
+  getSignalDates: (id: string, config?: RequestConfig) =>
+    api.get<BacktestSignalDates>(`/backtests/${id}/signals`, config),
+
+  /**
+   * Signal details for one rebalance date (B2), rank asc / nulls last,
+   * server-side pagination. Tri-state 404 like getSignalDates.
+   */
+  getSignalDetails: (
+    id: string,
+    date: string,
+    page = 0,
+    pageSize = 50,
+    config?: RequestConfig,
+  ) =>
+    api.get<BacktestSignalDetailsPage>(
+      `/backtests/${id}/signals?date=${encodeURIComponent(date)}&page=${page}&page_size=${pageSize}`,
+      config,
+    ),
+
   /** Multi-dimensional strategy ranking across runs (T7). */
   rank: (
     body: { run_ids: string[]; weights?: Record<string, number> },
@@ -296,6 +319,30 @@ export interface BacktestAttribution {
   summary: AttributionSummary
   periods: AttributionPeriod[]
   sectors: AttributionSector[]
+}
+
+// ── Signal details types (B2) ────────────────────────────────────────────────
+
+export interface BacktestSignalDates {
+  dates: string[]
+  total: number
+}
+
+export interface BacktestSignalItem {
+  asset_id: string
+  score: number | null
+  rank: number | null
+  action: 'enter' | 'hold' | 'exit' | 'candidate' | string
+  prev_weight: number | null
+  new_weight: number | null
+  factor_scores: Record<string, number>
+}
+
+export interface BacktestSignalDetailsPage {
+  items: BacktestSignalItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
 // ── Regime timeline / ranking types ─────────────────────────────────────────

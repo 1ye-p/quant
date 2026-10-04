@@ -16,6 +16,9 @@ export const queryKeys = {
     detail: (id: string) => ['backtests', id] as const,
     analysis: (id: string) => ['backtests', id, 'analysis'] as const,
     attribution: (id: string) => ['backtests', id, 'attribution'] as const,
+    signalDates: (id: string) => ['backtests', id, 'signals-dates'] as const,
+    signalDetails: (id: string, date: string, page: number, pageSize: number) =>
+      ['backtests', id, 'signals', date, page, pageSize] as const,
     risk: (id: string) => ['backtests', id, 'risk'] as const,
     tearsheet: (id: string) => ['backtests', id, 'tearsheet'] as const,
     validationWindows: (id: string) => ['backtests', id, 'validation-windows'] as const,

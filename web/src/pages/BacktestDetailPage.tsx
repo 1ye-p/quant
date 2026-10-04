@@ -13,6 +13,7 @@ type TabDef = { id: string; path: string }
 const TABS: TabDef[] = [
   { id: 'overview', path: '' },
   { id: 'tearsheet', path: 'tearsheet' },
+  { id: 'signals', path: 'signals' },
   { id: 'overfitting', path: 'overfitting' },
   { id: 'fills', path: 'fills' },
   { id: 'walkforward', path: 'walkforward' },

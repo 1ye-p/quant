@@ -41,6 +41,9 @@ export type {
   AttributionSummary,
   AttributionPeriod,
   AttributionSector,
+  BacktestSignalDates,
+  BacktestSignalItem,
+  BacktestSignalDetailsPage,
 } from './backtests'
 
 export { mlApi } from './ml'

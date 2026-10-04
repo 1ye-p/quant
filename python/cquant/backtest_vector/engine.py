@@ -110,6 +110,15 @@ class BacktestResult:
     # gross_exposure / nav from the fill simulator (diverges when limit-down /
     # suspension blocks the de-risking sells). Empty when no regime_sm.
     regime_scale_history: pl.DataFrame = field(default_factory=pl.DataFrame)
+    # B2 signal-detail capture (read-after-clear): per rebalance date,
+    # {"trade_date", "detail", "prev_weights", "new_weights"} where ``detail``
+    # is the strategy's optional ``last_score_detail`` snapshot (full ranked
+    # cross-section with `_w_{factor}` part columns). Empty for strategies
+    # that don't expose the capability (Strategy ABC unaffected).
+    signal_details: list[dict] = field(default_factory=list)
+    # B2: missing-factor names merged (deduped) across per-rebalance-day
+    # snapshots of ``strategy.missing_factors``.
+    missing_factors: list[str] = field(default_factory=list)
 
     def to_summary_dict(self) -> dict:
         """返回回测结果的核心指标摘要字典。
@@ -520,6 +529,9 @@ class VectorBacktestEngine:
         all_weights: list[dict] = []
         pretrade_decisions: list[dict] = []
         rebalance_dates: list[date] = []
+        # B2 signal-detail capture state (see BacktestResult.signal_details)
+        signal_detail_log: list[dict] = []
+        signal_missing_factors: set[str] = set()
         # Track committed weights for building risk context positions
         committed_weights: dict[str, float] = {}
         daily_returns: list[float] = []
@@ -579,6 +591,16 @@ class VectorBacktestEngine:
                     extra=spec.extra,
                 )
                 signals = spec.strategy.generate_signals(ctx)
+                # B2 read-after-clear capture: snapshot the strategy's optional
+                # last_score_detail / missing_factors IMMEDIATELY after the
+                # call, then null the attribute so a reused strategy instance
+                # (WF folds share one instance across refit runs) can never
+                # leak the previous fold's cross-section into the next read.
+                detail = getattr(spec.strategy, "last_score_detail", None)
+                if hasattr(spec.strategy, "last_score_detail"):
+                    spec.strategy.last_score_detail = None
+                for _mf in getattr(spec.strategy, "missing_factors", None) or []:
+                    signal_missing_factors.add(_mf)
                 # Exclude force-exited stocks (cooldown until next rebalance)
                 if force_exited_assets:
                     signals = signals.filter(~pl.col("asset_id").is_in(list(force_exited_assets)))
@@ -702,6 +724,16 @@ class VectorBacktestEngine:
                 # Update committed weights
                 if weights_dict:
                     committed_weights = weights_dict.copy()
+
+                # B2: capture the rebalance's holdings diff alongside the
+                # score-detail snapshot (prev = committed before this
+                # rebalance's transformations; new = committed after).
+                signal_detail_log.append({
+                    "trade_date": td,
+                    "detail": detail,
+                    "prev_weights": old_weights,
+                    "new_weights": dict(committed_weights),
+                })
 
                 # Deduct estimated turnover cost from NAV estimate
                 if weights_dict and nav_estimate > 0:
@@ -954,6 +986,8 @@ class VectorBacktestEngine:
             rebalance_dates=rebalance_dates,
             forced_exits=forced_exit_log,
             regime_scale_history=regime_scale_history,
+            signal_details=signal_detail_log,
+            missing_factors=sorted(signal_missing_factors),
         )
 
     @staticmethod

@@ -497,6 +497,7 @@ class BacktestRunner:
         self._persist_signals(result, run_id, spec)
         self._persist_fills(result, run_id)
         self._persist_positions(result, run_id)
+        self._persist_signal_details(result, run_id, spec)
         self._persist_rolling_risk_metrics(result, run_id)
         self._persist_drawdown_periods(result, run_id)
         self._persist_portfolio_snapshots(result, run_id)
@@ -947,6 +948,7 @@ class BacktestRunner:
         self._persist_signals(result, run_id, persist_spec)
         self._persist_fills(result, run_id)
         self._persist_positions(result, run_id)
+        self._persist_signal_details(result, run_id, persist_spec)
         self._persist_rolling_risk_metrics(result, run_id)
         self._persist_drawdown_periods(result, run_id)
         self._persist_portfolio_snapshots(result, run_id)
@@ -1546,6 +1548,177 @@ class BacktestRunner:
             logger.error(
                 "Failed to stamp %s=false for run %s: %s", flag, run_id, mark_exc
             )
+
+    # ------------------------------------------------------------------
+    # B2: per-run signal details (gold_bt_signal_details)
+    # ------------------------------------------------------------------
+
+    def _persist_signal_details(self, result, run_id: str, spec=None) -> None:
+        """Write per-rebalance signal details to gold_bt_signal_details (B2).
+
+        Sources ``result.signal_details`` — the engine's read-after-clear
+        capture of the strategy's optional ``last_score_detail`` plus the
+        rebalance's prev/new holding sets. Per date, each scored asset is
+        classified (enter / hold / exit / candidate) against the two holding
+        sets; boundary trim (D2-A) keeps holdings + exits + top candidates
+        by rank with a hard ``4 x top_n`` rows-per-day cap.
+
+        Missing factors (merged daily snapshots from the engine) are stamped
+        into the run's tags as ``signals_missing_factors`` (JSON list); the
+        key is omitted when nothing is missing.
+
+        Failures follow the fills pattern: ``signals_persisted=false`` +
+        error summary in tags — the run's status is unaffected.
+        """
+        try:
+            records = getattr(result, "signal_details", None) or []
+            top_n = max(int(getattr(spec, "top_n", 10) or 10), 1)
+            rows: list[tuple] = []
+            for rec in records:
+                rows.extend(self._signal_detail_rows(rec, run_id, top_n))
+            if rows:
+                self._catalog.upsert(
+                    "gold_bt_signal_details",
+                    ["run_id", "trade_date", "asset_id", "score", "rank",
+                     "action", "prev_weight", "new_weight", "factor_scores_json"],
+                    rows,
+                    ["run_id", "trade_date", "asset_id"],
+                )
+                logger.info(
+                    "Persisted %d signal detail rows to gold_bt_signal_details",
+                    len(rows),
+                )
+            missing = sorted(set(getattr(result, "missing_factors", None) or []))
+            if missing:
+                self._stamp_run_tags(
+                    run_id, {"signals_missing_factors": json.dumps(missing)}
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to persist signal details for run %s: %s",
+                run_id, exc, exc_info=True,
+            )
+            self._mark_persist_failure(run_id, exc, "signals_persisted", "signals_error")
+
+    @staticmethod
+    def _signal_detail_rows(rec: dict, run_id: str, top_n: int) -> list[tuple]:
+        """Classify one rebalance record into gold_bt_signal_details rows.
+
+        Actions (detail asset set vs prev/new holding sets):
+        - enter: in new holdings, not in prev
+        - hold:  in both holding sets
+        - exit:  in prev, not in new (scored exits keep their factor parts;
+                 unscored exits get NULL score/rank/factor json)
+        - candidate: scored but in neither holding set
+
+        Boundary trim (D2-A): keep the full holding set + the day's exits +
+        the best-ranked candidates, with a hard cap of 4 x top_n rows.
+        """
+        detail = rec.get("detail")
+        if detail is None or (hasattr(detail, "is_empty") and detail.is_empty()):
+            return []
+
+        td = rec.get("trade_date")
+        prev: dict[str, float] = rec.get("prev_weights") or {}
+        new: dict[str, float] = rec.get("new_weights") or {}
+        cap = 4 * top_n
+
+        weight_cols = [c for c in detail.columns if c.startswith("_w_")]
+        classified: dict[str, dict] = {}
+        for row in detail.iter_rows(named=True):
+            aid = row["asset_id"]
+            if aid in new:
+                action = "enter" if aid not in prev else "hold"
+            elif aid in prev:
+                action = "exit"
+            else:
+                action = "candidate"
+            classified[aid] = {
+                "score": None if row.get("score") is None else float(row["score"]),
+                "rank": None if row.get("rank") is None else int(row["rank"]),
+                "action": action,
+                "factor_scores": {
+                    c[len("_w_"):]: None if row[c] is None else float(row[c])
+                    for c in weight_cols
+                },
+            }
+
+        # holdings (enter+hold) + the day's exits
+        keep = set(new.keys()) | (set(prev.keys()) - set(new.keys()))
+        # candidates best-rank first, fitted into the remaining budget
+        budget = max(cap - len(keep), 0)
+        candidates = sorted(
+            (a for a, r in classified.items() if r["action"] == "candidate"),
+            key=lambda a: (classified[a]["rank"] is None, classified[a]["rank"] or 0),
+        )
+        keep.update(candidates[:budget])
+
+        rows: list[tuple] = []
+        for aid in sorted(keep):
+            info = classified.get(aid)
+            if info is not None:
+                score, rank, action = info["score"], info["rank"], info["action"]
+                factor_json = json.dumps(info["factor_scores"])
+            else:
+                # unscored keep-member (not in the day's cross-section):
+                # exit when held-and-dropped, else enter/hold by membership
+                score, rank, factor_json = None, None, None
+                if aid in prev and aid not in new:
+                    action = "exit"
+                elif aid in prev:
+                    action = "hold"
+                else:
+                    action = "enter"
+            rows.append((
+                run_id,
+                str(td),
+                aid,
+                score,
+                rank,
+                action,
+                float(prev.get(aid, 0.0)),
+                float(new.get(aid, 0.0)),
+                factor_json,
+            ))
+        assert len(rows) <= cap, (
+            f"signal detail rows for {td} exceed 4x top_n cap: {len(rows)} > {cap}"
+        )
+        return rows
+
+    def _stamp_run_tags(self, run_id: str, updates: dict) -> None:
+        """Merge ``updates`` into the run's tags (JSON dict) column.
+
+        Defensive on legacy non-dict tags values (preserved under
+        ``tags_legacy``), mirroring ``_mark_persist_failure``.
+        """
+        tags: dict = {}
+        try:
+            tags_row = self._catalog.query(
+                "SELECT tags FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+            )
+            if not tags_row.is_empty():
+                raw = tags_row["tags"][0]
+                if raw:
+                    if isinstance(raw, dict):
+                        tags = dict(raw)
+                    else:
+                        try:
+                            parsed = json.loads(raw) if isinstance(raw, str) else raw
+                            if isinstance(parsed, dict):
+                                tags = parsed
+                            elif parsed is not None:
+                                tags["tags_legacy"] = (
+                                    raw if isinstance(raw, str) else json.dumps(parsed)
+                                )
+                        except (TypeError, ValueError):
+                            tags["tags_legacy"] = str(raw)
+            tags.update(updates)
+            self._catalog.execute(
+                "UPDATE gold_backtest_runs SET tags = ? WHERE run_id = ?",
+                [json.dumps(tags), run_id],
+            )
+        except Exception as exc:
+            logger.error("Failed to stamp tags for run %s: %s", run_id, exc)
 
     def _persist_portfolio_snapshots(self, result, run_id: str) -> None:
         """Write portfolio snapshots to gold_portfolio_snapshots."""

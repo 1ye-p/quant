@@ -33,7 +33,17 @@ class MultiFactorStrategy(Strategy):
     penalty_per_missing : float
         Points subtracted from composite score for each missing factor
         (only used when missing_factor_strategy == "risk_penalty").
+
+    Optional capability (B2, engine-detected via getattr — not on the ABC):
+    ``last_score_detail`` / ``missing_factors`` are reset at the start of
+    every ``generate_signals`` call and populated only on the success path.
     """
+
+    #: Per-call score detail: columns [asset_id, score, rank, _w_{factor}...].
+    #: The `_w_` prefix is kept as-is; consumers strip it if needed.
+    last_score_detail: pl.DataFrame | None
+    #: Unique factor names missing from the feature table for the latest call.
+    missing_factors: list[str]
 
     def __init__(
         self,
@@ -48,6 +58,8 @@ class MultiFactorStrategy(Strategy):
         self._top_n = top_n
         self._missing_factor_strategy = missing_factor_strategy
         self._penalty_per_missing = penalty_per_missing
+        self.last_score_detail = None
+        self.missing_factors = []
 
     @property
     def strategy_id(self) -> str:
@@ -97,6 +109,7 @@ class MultiFactorStrategy(Strategy):
             for col in factor_weights:
                 if col not in day_features.columns:
                     logger.warning("Factor %r not in features, filling with 0.0", col)
+                    self._note_missing_factor(col)
                     day_features = day_features.with_columns(pl.lit(0.0).alias(col))
                 else:
                     day_features = day_features.with_columns(
@@ -108,7 +121,18 @@ class MultiFactorStrategy(Strategy):
             return day_features
 
     # ------------------------------------------------------------------
+    def _note_missing_factor(self, name: str) -> None:
+        """Accumulate a unique missing-factor name for the current call."""
+        if name not in self.missing_factors:
+            self.missing_factors.append(name)
+
+    # ------------------------------------------------------------------
     def generate_signals(self, ctx: StrategyContext) -> SignalFrame:
+        # B2 lifecycle: reset per-call state FIRST (stays None/empty on failure
+        # or early return — no cross-day residue), populate on success only.
+        self.last_score_detail = None
+        self.missing_factors = []
+
         empty = _empty_frame()
 
         if ctx.features is None or ctx.features.is_empty():
@@ -123,6 +147,9 @@ class MultiFactorStrategy(Strategy):
 
         # Keep only factors present in the features
         available = {k: w for k, w in self._factor_weights.items() if k in day_features.columns}
+        for k in self._factor_weights:
+            if k not in day_features.columns:
+                self._note_missing_factor(k)
         if not available:
             return empty
 
@@ -154,7 +181,23 @@ class MultiFactorStrategy(Strategy):
                 .alias("_composite")
             ).drop("_null_count")
 
-        scored = scored.sort("_composite", descending=True).head(self._top_n)
+        scored = scored.sort("_composite", descending=True)
+
+        # B2: expose per-call score detail (full ranked cross-section).
+        # Columns: asset_id / score / rank, then `_w_{factor}` weighted
+        # z-score parts (prefix kept as-is; consumers strip if needed).
+        if not scored.is_empty():
+            ranked = scored.with_row_index("_row")
+            self.last_score_detail = ranked.select(
+                [
+                    pl.col("asset_id"),
+                    pl.col("_composite").alias("score"),
+                    (pl.col("_row") + 1).alias("rank"),
+                ]
+                + [pl.col(f"_w_{c}") for c in available]
+            )
+
+        scored = scored.head(self._top_n)
 
         if scored.is_empty():
             return empty

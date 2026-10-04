@@ -41,7 +41,21 @@ def _empty_frame() -> pl.DataFrame:
 
 
 class DSLStrategy(Strategy):
-    """L2 DSL 策略：spec.score 加权打分 → TopN 信号（接口形态对齐 MultiFactorStrategy）。"""
+    """L2 DSL 策略：spec.score 加权打分 → TopN 信号（接口形态对齐 MultiFactorStrategy）。
+
+    Optional capability (B2, engine-detected via getattr — not on the ABC):
+    ``last_score_detail`` / ``missing_factors`` are reset at the start of
+    every ``generate_signals`` call and populated only on the success path.
+    Detail 列形态与 MultiFactorStrategy 一致：前三列 asset_id / score /
+    rank，其后为 ``_w_{factor}`` 分项列（factor 取 resolved_name，即物化宽
+    表列名；`_w_` 前缀保留原样，消费侧按需剥离）。
+    """
+
+    #: Per-call score detail: [asset_id, score, rank, _w_{factor}...] — same
+    #: column shape as MultiFactorStrategy.last_score_detail.
+    last_score_detail: pl.DataFrame | None
+    #: Unique factor names missing from the feature table for the latest call.
+    missing_factors: list[str]
 
     def __init__(
         self,
@@ -71,6 +85,9 @@ class DSLStrategy(Strategy):
                         f"自定义因子「{item.resolved_name}」不在 factor_registry 中 — "
                         "请先在自定义因子库创建并物化"
                     )
+        # B2 optional capability state (per-call; see class docstring)
+        self.last_score_detail: pl.DataFrame | None = None
+        self.missing_factors: list[str] = []
 
     @property
     def strategy_id(self) -> str:
@@ -83,6 +100,11 @@ class DSLStrategy(Strategy):
     # ── Strategy ABC ──────────────────────────────────────────────────────
 
     def generate_signals(self, ctx: StrategyContext) -> SignalFrame:
+        # B2 lifecycle: reset per-call state FIRST (stays None/empty on failure
+        # or early return — no cross-day residue), populate on success only.
+        self.last_score_detail = None
+        self.missing_factors = []
+
         empty = _empty_frame()
         if ctx.features is None or ctx.features.is_empty():
             return empty
@@ -98,6 +120,9 @@ class DSLStrategy(Strategy):
             fw.factor_name for fw in self._config.factors
             if fw.factor_name not in day_features.columns
         ]
+        for name in missing:
+            if name not in self.missing_factors:
+                self.missing_factors.append(name)
         if missing:
             logger.warning(
                 "DSLStrategy[%s]: 因子 %s 在 %s 的特征宽表中缺失，已跳过",
@@ -109,7 +134,33 @@ class DSLStrategy(Strategy):
         day_config = ScoringConfig(name=self._config.name, factors=available)
         scored = self._scorer._normalize_cross_section(day_features, day_config)
         scored = self._scorer._weighted_sum(scored, day_config.factors)
-        scored = scored.sort("score", descending=True).head(self._top_n)
+        scored = scored.sort("score", descending=True)
+
+        # B2: expose per-call score detail, column shape aligned with
+        # MultiFactorStrategy — [asset_id, score, rank, _w_{factor}...].
+        # `_w_{factor}` = weight * sign * normalized(z-scored) factor value,
+        # so the parts sum exactly to `score`.
+        if not scored.is_empty():
+            part_exprs = [
+                (
+                    pl.col(fw.factor_name)
+                    * fw.weight
+                    * (-1.0 if fw.direction == "short" else 1.0)
+                ).alias(f"_w_{fw.factor_name}")
+                for fw in day_config.factors
+                if fw.factor_name in scored.columns
+            ]
+            ranked = scored.with_row_index("_row").with_columns(part_exprs)
+            self.last_score_detail = ranked.select(
+                [
+                    pl.col("asset_id"),
+                    pl.col("score"),
+                    (pl.col("_row") + 1).alias("rank"),
+                ]
+                + [e.meta.output_name() for e in part_exprs]
+            )
+
+        scored = scored.head(self._top_n)
         if scored.is_empty():
             return empty
 

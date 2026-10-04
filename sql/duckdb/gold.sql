@@ -199,3 +199,21 @@ CREATE TABLE IF NOT EXISTS gold_positions (
 
 CREATE INDEX IF NOT EXISTS idx_gold_positions_run
     ON gold_positions (run_id, trade_date);
+
+-- ── Per-run signal details (B2) ───────────────────────────────────────────────
+-- Per-run signal detail (score / rank / per-factor weighted scores), optional
+-- capability exposed by MultiFactor / DSL strategies via
+-- ``strategy.last_score_detail``; persisted by the runner per rebalance date.
+CREATE TABLE IF NOT EXISTS gold_bt_signal_details (
+    run_id       VARCHAR NOT NULL,
+    trade_date   DATE NOT NULL,
+    asset_id     VARCHAR NOT NULL,
+    score        DOUBLE, rank INTEGER,
+    action       VARCHAR,          -- enter | hold | exit | candidate
+    prev_weight  DOUBLE, new_weight DOUBLE,
+    factor_scores_json JSON,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (run_id, trade_date, asset_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gold_bt_signals_run
+    ON gold_bt_signal_details (run_id, trade_date);

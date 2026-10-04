@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from pydantic import BaseModel
 
 from cquant.api_server.deps import CatalogDep, run_job_async
 from cquant.api_server.schemas.common import UniverseCreateBody
@@ -554,6 +555,29 @@ async def get_universe_stats(
 
     universe = PointInTimeUniverse(catalog)
     return universe.get_universe_stats(start_date, end_date)
+
+
+class FundamentalsBackfillBody(BaseModel):
+    """``dry_run`` 缺省为 false（默认实跑回填，幂等可重入）。"""
+
+    dry_run: bool = False
+
+
+@router.post("/fundamentals/backfill-announce")
+def backfill_fundamentals_announce(
+    body: FundamentalsBackfillBody, catalog: CatalogDep
+) -> dict:
+    """Backfill announce_date on silver_fundamentals (D4-A fixed deadlines).
+
+    覆盖两类行（幂等）：akshare 前视行（announce_date = report_date）与
+    announce_date IS NULL 行（含 tushare NULL 行——现实 tushare 行有
+    f_ann_date 不为 NULL，风险纯理论）；tushare 非空行不会被修改。
+    ``dry_run=true`` 只统计不写库。返回统计 dict 透传：
+    candidates / updated / by_source / violations_after / tushare_violations。
+    """
+    from cquant.datahub.pipelines.announce_backfill import backfill_announce_dates
+
+    return backfill_announce_dates(catalog, dry_run=body.dry_run)
 
 
 @router.post("/bootstrap")

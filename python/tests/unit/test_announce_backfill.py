@@ -132,3 +132,39 @@ def test_backfill_dry_run_writes_nothing(catalog):
     # Nothing written: lookahead/NULL rows unchanged
     assert _fetch(catalog, "SSE:600000", date(2025, 3, 31)) == date(2025, 3, 31)
     assert _fetch(catalog, "SSE:600000", date(2025, 6, 30)) is None
+
+
+# ---------------------------------------------------------------------------
+# scripts/migrate_fundamentals_pit.py — thin wrapper (single-impl delegation)
+# ---------------------------------------------------------------------------
+
+
+def _load_script():
+    import importlib.util
+
+    path = _REPO_ROOT / "scripts" / "migrate_fundamentals_pit.py"
+    spec = importlib.util.spec_from_file_location("migrate_fundamentals_pit", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_script_migrate_delegates_to_backfill(catalog):
+    mod = _load_script()
+    result = mod.migrate(catalog)
+    # stats shape + real writes match the shared impl
+    expected_keys = {
+        "candidates", "updated", "by_source", "violations_after", "tushare_violations",
+    }
+    assert expected_keys <= set(result)
+    assert result["updated"] == 5
+    assert _fetch(catalog, "SSE:600000", date(2025, 3, 31)) == date(2025, 4, 30)
+    assert _fetch(catalog, "SZSE:000001", date(2024, 12, 31)) == date(2025, 4, 30)
+
+
+def test_script_migrate_dry_run_writes_nothing(catalog):
+    mod = _load_script()
+    result = mod.migrate(catalog, dry_run=True)
+    assert result["candidates"] == 5
+    assert result["updated"] == 0
+    assert _fetch(catalog, "SSE:600000", date(2025, 3, 31)) == date(2025, 3, 31)

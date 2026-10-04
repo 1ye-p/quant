@@ -148,27 +148,6 @@
   </div>
   {% endif %}
 
-  <!-- Brinson 归因分析 -->
-  {% if has_attribution %}
-  <div class="section">
-    <h2>Brinson 归因分析</h2>
-    <div class="two-col">
-      <div>{{ attribution_svg | safe }}</div>
-      <div class="effect-table">
-        <table>
-          <thead><tr><th>效应类型</th><th>贡献度</th></tr></thead>
-          <tbody>
-            <tr><td>配置效应</td><td>{{ "%.4f%%" | format(attribution_data.get('allocation_effect', 0) * 100) }}</td></tr>
-            <tr><td>选择效应</td><td>{{ "%.4f%%" | format(attribution_data.get('selection_effect', 0) * 100) }}</td></tr>
-            <tr><td>交互效应</td><td>{{ "%.4f%%" | format(attribution_data.get('interaction_effect', 0) * 100) }}</td></tr>
-            <tr><td><strong>超额收益合计</strong></td><td><strong>{{ "%.4f%%" | format(attribution_data.get('total_excess_return', 0) * 100) }}</strong></td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
   <!-- 交易摘要 -->
   {% if fills %}
   <div class="section">

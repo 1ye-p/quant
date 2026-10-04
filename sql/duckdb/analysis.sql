@@ -90,3 +90,19 @@ CREATE TABLE IF NOT EXISTS gold_drawdown_periods (
     underwater_days INTEGER,
     PRIMARY KEY (run_id, period_id)
 );
+
+-- gold_bt_attribution（Brinson 归因）
+-- 归位声明：此前由 bt_analyzer catalog.upsert 运行时动态建表；
+-- 本 DDL 与运行时已存在的动态表等价（列清单与 _persist_attribution upsert 一致）。
+CREATE TABLE IF NOT EXISTS gold_bt_attribution (
+    analysis_run_id     VARCHAR PRIMARY KEY,
+    total_return        DOUBLE,
+    benchmark_return    DOUBLE,
+    active_return       DOUBLE,
+    allocation_effect   DOUBLE,
+    selection_effect    DOUBLE,
+    interaction_effect  DOUBLE,
+    daily_json          JSON,
+    sector_details_json JSON,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);

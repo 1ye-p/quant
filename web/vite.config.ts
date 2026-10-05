@@ -23,6 +23,8 @@ export default defineConfig({
       output: {
         manualChunks: {
           monaco: ['@monaco-editor/react', 'monaco-editor'],
+          // Keep markdown rendering out of the main bundle — report tab lazy-loads it.
+          markdown: ['react-markdown', 'remark-gfm'],
         },
       },
     },

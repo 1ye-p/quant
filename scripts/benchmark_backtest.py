@@ -31,8 +31,11 @@
     # 仅指定维度
     python scripts/benchmark_backtest.py --dims 1000x250 5000x500
 
-    # 输出 JSON 报告到文件
+    # 输出 JSON 报告到文件（显式路径）
     python scripts/benchmark_backtest.py --out benchmark_report.json
+
+    # 按 tag 写入默认路径 artifacts/benchmarks/{date}_{tag}.json
+    python scripts/benchmark_backtest.py --tag pre_perf
 """
 
 from __future__ import annotations
@@ -349,7 +352,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out",
         metavar="PATH",
-        help="将完整 JSON 报告写入该路径。",
+        help=(
+            "将完整 JSON 报告写入该路径（显式路径优先）。"
+            " 未给出时写入默认路径 artifacts/benchmarks/{date}_{tag}.json。"
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        default="run",
+        help="默认输出文件名标签：artifacts/benchmarks/{date}_{tag}.json（默认 'run'）。",
     )
     parser.add_argument(
         "--seed",
@@ -395,11 +406,15 @@ def main(argv: list[str] | None = None) -> int:
         "seed": args.seed,
         "results": results,
     }
-    if args.out:
-        from pathlib import Path
+    from datetime import date as _date
+    from pathlib import Path
 
-        Path(args.out).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"JSON 报告已写入：{args.out}")
+    out_path = Path(args.out) if args.out else (
+        Path("artifacts/benchmarks") / f"{_date.today().isoformat()}_{args.tag}.json"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"JSON 报告已写入：{out_path}")
 
     return 0
 

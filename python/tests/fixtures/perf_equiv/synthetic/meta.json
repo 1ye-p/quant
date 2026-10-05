@@ -1,0 +1,23 @@
+{
+  "source": "synthetic (seed=42, deterministic)",
+  "git_rev": "b22cd55",
+  "seed": 42,
+  "n_assets": 50,
+  "n_days": 120,
+  "boundary_assets": {
+    "st": "SSE:ST0001",
+    "limit_up": "SSE:600100",
+    "limit_down": "SSE:600200",
+    "suspended": "SSE:600300",
+    "new_listing_no_prev_close": "SSE:600400"
+  },
+  "notes": "ST 资产无现行 ST 分支：board 检测 → MAIN → ±10%（fixture 锁定现行行为）。missing-is_suspended 边界为引擎直调（生产 SQL 恒产出该列）。regenerate: python python/tests/fixtures/perf_equiv/generate_fixtures.py --only synthetic",
+  "recorded": {
+    "n_rebalance_days_recorded": 110,
+    "tradability_rows": 5450,
+    "fills_rows": 197,
+    "nav_rows": 109,
+    "tradability_none_days": [],
+    "missing_is_suspended_is_none": true
+  }
+}

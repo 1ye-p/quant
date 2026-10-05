@@ -224,10 +224,58 @@ export const LazyMarkdown = lazy(async () => {
   return { default: mod.MarkdownRenderer }
 })
 
+// ── Unknown-marker fencing (rendering layer, B3-2) ────────────────────────────
+
+/**
+ * Wrap markers that parse as JSON but have an unknown chart_type (or malformed
+ * JSON) in fenced ```text code blocks, so the markdown renderer gives them a
+ * code-block appearance instead of leaking raw marker syntax into prose.
+ *
+ * Implementation choice: exact marker extents require the same bracket-depth
+ * scan as parseReportSegments (a regex would mis-cut on `}]` inside data
+ * arrays), so this lives here next to findMarkerEnd.
+ *
+ * Caveat (accepted): a marker already inside a user-written fenced block would
+ * get nested fences — backend-generated reports never do this.
+ */
+export function fenceUnknownMarkers(content: string): string {
+  MARKER_HEAD_RE.lastIndex = 0
+  let out = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = MARKER_HEAD_RE.exec(content)) !== null) {
+    const payloadStart = match.index + match[0].length
+    const end = findMarkerEnd(content, payloadStart)
+    if (end === -1) continue
+    const rawMarker = content.slice(match.index, end)
+    const jsonStr = content.slice(payloadStart, end - 1)
+    let known = false
+    try {
+      const parsed = JSON.parse(jsonStr) as ChartPayload
+      known =
+        !!parsed &&
+        typeof parsed === 'object' &&
+        typeof parsed.chart_type === 'string' &&
+        parsed.chart_type === match[1] &&
+        KNOWN_CHART_TYPES.has(match[1])
+    } catch {
+      known = false
+    }
+    if (!known) {
+      out += content.slice(cursor, match.index) + '```text\n' + rawMarker + '\n```'
+      cursor = end
+    }
+  }
+  return out + content.slice(cursor)
+}
+
 // ── Top-level report content renderer (consumed by B3-2 ReportTab pipeline) ──
 
 export function ReportContent({ content }: { content: string }) {
-  const segments = parseReportSegments(content)
+  // Unknown/malformed markers → fenced code blocks first, then split segments.
+  // parseReportSegments leaves fenced unknown markers inside text segments
+  // verbatim, so the markdown renderer shows them as code blocks.
+  const segments = parseReportSegments(fenceUnknownMarkers(content))
   return (
     <>
       {segments.map((seg, i) =>

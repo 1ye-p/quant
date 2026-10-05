@@ -2547,7 +2547,9 @@
         "failed": "Report generation failed",
         "empty": "No research report yet. Click the button above and the AI will generate a Chinese markdown report from this run's context.",
         "generated_at": "Generated at",
-        "chart_spec_note": "Note: charts inside the report are shown as spec text (inline chart rendering arrives in a later release)."
+        "chart_spec_note": "Note: the report is rendered as markdown with inline charts; unrecognized chart specs are kept as code blocks.",
+        "view_raw": "View raw text",
+        "view_rendered": "View rendered"
       },
       "regime": {
         "not_applicable": "No regime (market-state timing) layer on this backtest — not applicable",

@@ -1,12 +1,14 @@
 /**
- * AI Research Report tab (Phase 4 T6):
+ * AI Research Report tab (Phase 4 T6, B3-2):
  * - "Generate" button → POST /{run_id}/report → job polling → refetch GET
- * - Markdown rendered as preformatted text (no react-markdown dependency in
- *   this project; charts embedded as chart-spec text are shown verbatim —
- *   inline chart rendering is out of scope for this batch)
+ * - Report markdown rendered via ReportContent (B3-1 pipeline): markdown text
+ *   via lazy-loaded react-markdown chunk, `[CHART:...]` markers as inline
+ *   chart components, unknown markers as code blocks
+ * - Render failures fall back to raw `<pre>` via a local boundary (no white
+ *   screen); "view raw text" toggle always available (default: rendered view)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -14,6 +16,28 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 import { backtestsApi } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
+import { ReportContent } from '@/lib/reportCharts'
+
+/**
+ * Local inline error boundary: if the markdown/chart pipeline throws during
+ * render, swap in the fallback (raw <pre>) instead of crashing the page.
+ * (The global ErrorBoundary navigates home — not appropriate here.)
+ */
+class ReportRenderBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch(error: Error) {
+    console.error('[BacktestReportTab] report render failed, falling back to raw text:', error)
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children
+  }
+}
 
 export function BacktestReportTab() {
   const { t } = useTranslation()
@@ -21,6 +45,8 @@ export function BacktestReportTab() {
   const qc = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Default: rendered (markdown + inline charts) view; user can flip to raw text.
+  const [viewRaw, setViewRaw] = useState(false)
 
   const reportQuery = useQuery({
     queryKey: queryKeys.backtests.report(runId ?? ''),
@@ -99,13 +125,42 @@ export function BacktestReportTab() {
             <span className="text-xs text-gray-400 font-mono">
               {report.report_id.slice(0, 12)}...
             </span>
-            <span className="text-xs text-gray-400">
-              {t('page.backtest.report.generated_at')}: {report.created_at?.slice(0, 19)}
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400">
+                {t('page.backtest.report.generated_at')}: {report.created_at?.slice(0, 19)}
+              </span>
+              <button
+                className="text-xs text-brand-700 hover:underline"
+                onClick={() => setViewRaw((v) => !v)}
+                data-testid="report-view-toggle"
+              >
+                {viewRaw
+                  ? t('page.backtest.report.view_rendered')
+                  : t('page.backtest.report.view_raw')}
+              </button>
+            </div>
           </div>
-          <pre className="whitespace-pre-wrap break-words text-sm text-gray-700 font-sans leading-relaxed">
-            {report.content_md}
-          </pre>
+          {viewRaw ? (
+            <pre
+              className="whitespace-pre-wrap break-words text-sm text-gray-700 font-sans leading-relaxed"
+              data-testid="report-raw-pre"
+            >
+              {report.content_md}
+            </pre>
+          ) : (
+            <ReportRenderBoundary
+              fallback={
+                <pre
+                  className="whitespace-pre-wrap break-words text-sm text-gray-700 font-sans leading-relaxed"
+                  data-testid="report-fallback-pre"
+                >
+                  {report.content_md}
+                </pre>
+              }
+            >
+              <ReportContent content={report.content_md} />
+            </ReportRenderBoundary>
+          )}
           <p className="text-xs text-gray-400 mt-3 pt-2 border-t border-gray-100">
             {t('page.backtest.report.chart_spec_note')}
           </p>

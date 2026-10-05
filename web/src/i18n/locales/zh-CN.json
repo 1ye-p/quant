@@ -552,6 +552,7 @@
       "section_regime": "市场状态 (regime)",
       "label_name": "策略名",
       "label_universe": "股票池",
+      "universe_help": "all = PIT 全市场（板块/指数已排除），其余为引擎预设股票池",
       "label_frequency": "调仓频率",
       "label_benchmark": "基准（可空）",
       "benchmark_placeholder": "如 SSE:000300，留空表示无基准",

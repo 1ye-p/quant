@@ -12,14 +12,26 @@ import { StrategyDSLEditor } from '@/components/strategies/StrategyDSLEditor'
 import { BacktestRunModal } from '@/components/strategies/BacktestRunModal'
 import { OptimizationReportModal } from '@/components/strategies/OptimizationReportModal'
 
-const DEFAULT_CONFIG = JSON.stringify({
+// 默认配置与 StrategyDSL schema（python/cquant/strategy_dsl/schema.py）对齐：
+// universe 为字符串（"all" 或引擎 preset 名），键结构 name/score/position/risk。
+export const DEFAULT_CONFIG = JSON.stringify({
+  strategy_type: "DSL",
   strategy_id: "my_strategy",
-  universe: { exchange: ["SSE", "SZSE"], min_liquidity: 1000000 },
-  rebalance_frequency: "1d",
-  risk_limits: { max_position_pct: 0.10, max_gross_leverage: 1.0 },
-  market_rule: { market: "CN", adj_type: "forward" },
-  factors: ["ret_20d", "vol_20d"],
-  sizer: "equal_weight"
+  dsl_spec: {
+    name: "my_strategy",
+    universe: "all",
+    frequency: "daily",
+    benchmark: "",
+    score: [
+      { factor: "ret_20d", weight: 1.0 },
+      { factor: "vol_20d", weight: -0.5 },
+    ],
+    position: { method: "equal_weight", params: {}, constraints: {} },
+    risk: [
+      { type: "position_limit", params: { max_weight: 0.1 } },
+      { type: "leverage_limit", params: { max_gross_leverage: 1.0 } },
+    ],
+  },
 }, null, 2)
 
 export function StrategiesPage() {

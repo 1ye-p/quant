@@ -31,6 +31,11 @@ describe('StrategyDSLEditor', () => {
     expect(screen.getByText(t('component.strategy_dsl.section_regime'))).toBeInTheDocument()
   })
 
+  it('renders "all" semantics help text next to the universe field', () => {
+    render(<StrategyDSLEditor strategyId="new" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
+    expect(screen.getByText(t('component.strategy_dsl.universe_help'))).toBeInTheDocument()
+  })
+
   it('shows Chinese zod errors mapped to fields on save attempt', async () => {
     render(<StrategyDSLEditor strategyId="new" onClose={vi.fn()} onSaved={vi.fn()} />, { wrapper })
     fireEvent.click(screen.getByText(t('common.save')))

@@ -388,6 +388,9 @@ export function StrategyDSLEditor({ strategyId, initialConfig = '', onClose, onS
                       ))}
                       <option value="all">all</option>
                     </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      {t('component.strategy_dsl.universe_help')}
+                    </p>
                   </div>
                   <div>
                     <label className="block text-xs text-gray-600 mb-1">

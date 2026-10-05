@@ -552,6 +552,7 @@
       "section_regime": "Regime",
       "label_name": "Name",
       "label_universe": "Universe",
+      "universe_help": "all = PIT whole market (indices excluded); others are engine presets",
       "label_frequency": "Frequency",
       "label_benchmark": "Benchmark (optional)",
       "benchmark_placeholder": "e.g. SSE:000300; empty = none",

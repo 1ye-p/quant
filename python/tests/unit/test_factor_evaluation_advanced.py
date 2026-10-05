@@ -59,7 +59,7 @@ class TestFactorTurnover:
     def test_returns_float_between_0_and_1(self) -> None:
         factors = _make_factor_data(20, 50)
         ev = FactorEvaluator(factor_col="factor", return_col="ret_5d")
-        result = ev.factor_turnover(factors, top_n=20)
+        result = ev.factor_turnover(factors, top_pct=0.2)
         assert 0.0 <= result <= 1.0
 
     def test_stable_rankings_give_low_turnover(self) -> None:
@@ -72,7 +72,7 @@ class TestFactorTurnover:
                 rows.append({"asset_id": a, "trade_date": d, "factor": asset_vals[a]})
         factors = pl.DataFrame(rows)
         ev = FactorEvaluator(factor_col="factor", return_col="ret_5d")
-        result = ev.factor_turnover(factors, top_n=10)
+        result = ev.factor_turnover(factors, top_pct=0.2)
         assert result == pytest.approx(0.0, abs=0.01)
 
     def test_random_rankings_give_higher_turnover(self) -> None:
@@ -85,7 +85,7 @@ class TestFactorTurnover:
                 rows.append({"asset_id": a, "trade_date": d, "factor": float(rng.normal(0, 1))})
         factors = pl.DataFrame(rows)
         ev = FactorEvaluator(factor_col="factor", return_col="ret_5d")
-        result = ev.factor_turnover(factors, top_n=20)
+        result = ev.factor_turnover(factors, top_pct=0.2)
         assert result > 0.2
 
 

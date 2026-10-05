@@ -345,8 +345,12 @@ class FactorEvaluator:
                                   "ic": pl.Series([], dtype=pl.Float64)})
         return pl.DataFrame(results).sort("lag")
 
-    def factor_turnover(self, factors: pl.DataFrame, top_n: int = 100) -> float:
-        """Average fraction of top-N assets that change between consecutive periods.
+    def factor_turnover(self, factors: pl.DataFrame, top_pct: float = 0.2) -> float:
+        """Average fraction of top-quantile assets that change between consecutive periods.
+
+        Each day selects the top ``max(1, int(top_pct * n_daily))`` assets, where
+        ``n_daily`` is that day's non-null cross-section count (denominator =
+        daily cross-section, not a global unique count).
 
         0.0 = perfectly stable rankings. 1.0 = complete turnover each period.
         """
@@ -358,12 +362,9 @@ class FactorEvaluator:
         turnovers: list[float] = []
 
         for d in sorted_dates:
-            today = (
-                factors.filter(pl.col("trade_date") == d)
-                .drop_nulls([self.factor_col])
-                .sort(self.factor_col, descending=True)
-                .head(top_n)
-            )
+            day = factors.filter(pl.col("trade_date") == d).drop_nulls([self.factor_col])
+            n_daily = len(day)
+            today = day.sort(self.factor_col, descending=True).head(max(1, int(top_pct * n_daily)))
             top_assets = set(today["asset_id"].to_list())
 
             if prev_top is not None and len(top_assets) > 0:

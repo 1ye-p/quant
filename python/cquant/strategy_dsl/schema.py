@@ -311,6 +311,12 @@ class StrategyDSL(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    # universe: "all"（默认，PIT 全市场——板块/指数已排除）或引擎 preset 名
+    # （backtest_vector/universe.py UNIVERSE_PRESETS 实际键：sse/szse/cyb/kcb/
+    # bse/idx_sse/idx_szse/idx_hs300/idx_zz500/idx_zz1000/idx_cyb/idx_kcb50）。
+    # 回测创建路由按 A4/D7-A 优先级接线：body.universe_id > 本字段（非
+    # "all" 时直达 resolve_universe）> 策略配置 universe_id；无效 preset 名
+    # 沿 resolve_universe 既有行为（走默认全市场分支，等同 "all"）。
     universe: str = "all"
     frequency: Literal["daily", "weekly", "monthly"] = "daily"
     score: list[ScoreItem] = Field(min_length=1)

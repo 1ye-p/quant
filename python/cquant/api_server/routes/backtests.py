@@ -280,6 +280,28 @@ def _run_backtest(catalog, spec):
     return runner.run(spec)
 
 
+def _resolve_request_universe(
+    body_universe_id: str, dsl_spec: dict | None, parsed: dict
+) -> str:
+    """A4/D7-A: universe 解析优先级（消除 dsl_spec.universe 死字段）。
+
+    1. ``body.universe_id`` 显式指定（≠ "all"）时优先；
+    2. 否则 ``dsl_spec.universe`` 非 "all" 时作为引擎 preset 名直达
+       ``resolve_universe``（sse/szse/cyb/kcb/bse/idx_*）；
+    3. 否则沿既有逻辑取策略配置的 ``universe_id``（默认 "all"）。
+
+    dsl_spec 为 None / universe 为 "all" 时与旧表达式 bit-for-bit 一致。
+    无效 preset 名不在路由层拦截：``resolve_universe`` 对未知名字走默认
+    全市场分支（等同 "all"），沿引擎既有行为。
+    """
+    if body_universe_id != "all":
+        return body_universe_id
+    dsl_universe = (dsl_spec or {}).get("universe", "all")
+    if dsl_universe != "all":
+        return dsl_universe
+    return parsed.get("universe_id", "all")
+
+
 def _validate_factor_weights(
     factor_weights: dict[str, float] | None,
     factors: list[str],
@@ -500,7 +522,7 @@ async def create_backtest(
     entry_conditions = body.entry_conditions or parsed.get("entry_conditions", [])
     exit_conditions = body.exit_conditions or parsed.get("exit_conditions", [])
     indicator_specs = body.indicator_specs or parsed.get("indicator_specs", [])
-    universe_id = body.universe_id if body.universe_id != "all" else parsed.get("universe_id", "all")
+    universe_id = _resolve_request_universe(body.universe_id, dsl_spec, parsed)
     missing_factor_strategy = body.missing_factor_strategy if body.missing_factor_strategy != "fill_0" else parsed.get("missing_factor_handling", "fill_0")
     penalty_per_missing = body.penalty_per_missing if body.penalty_per_missing != 0.5 else parsed.get("penalty_per_missing", 0.5)
 

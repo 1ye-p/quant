@@ -69,6 +69,23 @@ function applyWindow<T>(series: T[], win: WindowKey): T[] {
   return series.slice(Math.floor(series.length * (1 - frac)))
 }
 
+/**
+ * Zero-fill stacked-chart rows across the full key set.
+ *
+ * Top-N membership churns day to day — a key absent from a given day must read
+ * as weight 0, not undefined, or the Recharts stack breaks/gaps at those
+ * indices instead of summing to ~100%. Exported for direct unit testing.
+ */
+export function fillStackRows(
+  raw: Array<Record<string, number | string>>,
+  keys: string[],
+): Array<Record<string, number | string>> {
+  return raw.map(row => ({
+    date: row.date,
+    ...Object.fromEntries(keys.map(k => [k, Number(row[k] ?? 0)])),
+  }))
+}
+
 export function BacktestPositionsTab() {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
@@ -116,11 +133,7 @@ export function BacktestPositionsTab() {
       const ordered = [...keys].filter(k => k !== '__other__')
       if (keys.has('__other__')) ordered.push('__other__')
       // Same churn issue as the industry view: absent key = weight 0.
-      const filled = rows.map(row => ({
-        date: row.date,
-        ...Object.fromEntries(ordered.map(k => [k, Number(row[k] ?? 0)])),
-      }))
-      return { chartRows: filled, stackKeys: ordered }
+      return { chartRows: fillStackRows(rows, ordered), stackKeys: ordered }
     }
     const points = industryPoints(data)
     const keys = new Set<string>()
@@ -136,11 +149,7 @@ export function BacktestPositionsTab() {
     // read as weight 0, not undefined, or the Recharts stack breaks/gaps at
     // those indices instead of summing to ~100%.
     const stackKeys = [...keys].sort()
-    const rows = raw.map(row => ({
-      date: row.date,
-      ...Object.fromEntries(stackKeys.map(k => [k, Number(row[k] ?? 0)])),
-    }))
-    return { chartRows: rows, stackKeys }
+    return { chartRows: fillStackRows(raw, stackKeys), stackKeys }
   }, [chartQuery.data, metric])
 
   const windowedRows = useMemo(() => applyWindow(chartRows, win), [chartRows, win])

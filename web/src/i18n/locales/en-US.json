@@ -2586,7 +2586,7 @@
           "no_signal_details": "No signal details for this run",
           "no_signal_details_hint": "The run predates signal-detail persistence or persistence failed; new runs record per-rebalance score details automatically.",
           "unsupported_strategy_type": "This strategy type does not produce signal details",
-          "unsupported_strategy_type_hint": "Signal details are available for DSL / MultiFactor / Combo strategies only (they carry per-factor scores)."
+          "unsupported_strategy_type_hint": "Signal details are available for DSL / MultiFactor strategies only (they carry per-factor scores)."
         },
         "date_label": "Rebalance date",
         "dates_count": "{{total}} rebalance dates",

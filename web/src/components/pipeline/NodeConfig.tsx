@@ -36,9 +36,9 @@ const FIELDS_BY_TYPE: Record<string, FieldDef[]> = {
       { value: 'all', labelKey: 'factor_all' },
     ]},
     { key: 'universe', labelKey: 'universe', type: 'select', options: [
-      { value: 'hs300', labelKey: 'universe_hs300' },
-      { value: 'zz500', labelKey: 'universe_zz500' },
-      { value: 'zz1000', labelKey: 'universe_zz1000' },
+      { value: 'idx_hs300', labelKey: 'universe_hs300' },
+      { value: 'idx_zz500', labelKey: 'universe_zz500' },
+      { value: 'idx_zz1000', labelKey: 'universe_zz1000' },
       { value: 'all', labelKey: 'universe_all' },
     ]},
   ],

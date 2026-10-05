@@ -211,3 +211,16 @@ describe('BacktestPositionsTab — industry view', () => {
     expect(screen.getByTestId('positions-note').textContent).toContain('按权重原值降序')
   })
 })
+
+describe('fillStackRows — churn zero-fill (review I3 regression)', () => {
+  it('fills absent stack keys with 0 on membership-churn days', async () => {
+    const { fillStackRows } = await import('../backtest-tabs/BacktestPositionsTab')
+    const raw: Array<Record<string, number | string>> = [
+      { date: '2026-01-05', SSE: 0.6, SZSE: 0.4 },
+      { date: '2026-01-06', SSE: 1.0 }, // SZSE dropped out of the top-N
+    ]
+    const out = fillStackRows(raw, ['SSE', 'SZSE', '__other__'])
+    expect(out[0]).toEqual({ date: '2026-01-05', SSE: 0.6, SZSE: 0.4, __other__: 0 })
+    expect(out[1]).toEqual({ date: '2026-01-06', SSE: 1.0, SZSE: 0, __other__: 0 })
+  })
+})

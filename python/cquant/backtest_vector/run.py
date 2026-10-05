@@ -1722,9 +1722,15 @@ class BacktestRunner:
             ))
         if len(rows) > cap:
             logger.warning(
-                "signal-detail cap breached (%d > %d) — trimming; check sizer/"
-                "max_positions overrides vs top_n", len(rows), cap,
+                "signal-detail cap breached (%d > %d) — trimming (exits first, "
+                "then rank); check sizer/max_positions overrides vs top_n",
+                len(rows), cap,
             )
+            # Rows arrive in asset_id order; a blind [:cap] slice would keep
+            # alphabetically-first assets and could drop exit rows that
+            # document a position close. Prioritize exits/holds, then rank.
+            _prio = {"exit": 0, "hold": 1, "enter": 2}
+            rows = sorted(rows, key=lambda r: (_prio.get(r[5], 3), r[4] is None, r[4] or 0))
             rows = rows[:cap]
         return rows
 

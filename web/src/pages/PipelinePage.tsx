@@ -39,7 +39,7 @@ const DEFAULT_NODES: Node<PipelineNodeData>[] = [
       label: 'factor',
       nodeType: 'factor',
       status: 'pending',
-      config: { factor_set: 'alpha158', universe: 'hs300' },
+      config: { factor_set: 'alpha158', universe: 'idx_hs300' },
     },
   },
   {

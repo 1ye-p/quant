@@ -2586,7 +2586,7 @@
           "no_signal_details": "该回测无信号明细",
           "no_signal_details_hint": "为旧版本运行或明细落盘失败；新运行将自动记录每个调仓日的打分明细。",
           "unsupported_strategy_type": "该策略类型不产生信号明细",
-          "unsupported_strategy_type_hint": "信号明细仅支持 DSL / 多因子 / 组合策略（含分项因子打分）。"
+          "unsupported_strategy_type_hint": "信号明细仅支持 DSL / 多因子策略（含分项因子打分）。"
         },
         "date_label": "调仓日",
         "dates_count": "共 {{total}} 个调仓日",

@@ -316,7 +316,8 @@ class StrategyDSL(BaseModel):
     # bse/idx_sse/idx_szse/idx_hs300/idx_zz500/idx_zz1000/idx_cyb/idx_kcb50）。
     # 回测创建路由按 A4/D7-A 优先级接线：body.universe_id > 本字段（非
     # "all" 时直达 resolve_universe）> 策略配置 universe_id；无效 preset 名
-    # 沿 resolve_universe 既有行为（走默认全市场分支，等同 "all"）。
+    # 在路由层被 400 拦截（引擎 resolve_universe 对未知名仍回退全市场，
+    # 但 API 请求不再放行该路径）。
     universe: str = "all"
     frequency: Literal["daily", "weekly", "monthly"] = "daily"
     score: list[ScoreItem] = Field(min_length=1)

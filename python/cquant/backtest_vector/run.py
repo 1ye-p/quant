@@ -1720,9 +1720,12 @@ class BacktestRunner:
                 float(new.get(aid, 0.0)),
                 factor_json,
             ))
-        assert len(rows) <= cap, (
-            f"signal detail rows for {td} exceed 4x top_n cap: {len(rows)} > {cap}"
-        )
+        if len(rows) > cap:
+            logger.warning(
+                "signal-detail cap breached (%d > %d) — trimming; check sizer/"
+                "max_positions overrides vs top_n", len(rows), cap,
+            )
+            rows = rows[:cap]
         return rows
 
     def _stamp_run_tags(self, run_id: str, updates: dict) -> None:

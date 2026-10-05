@@ -8,8 +8,8 @@
 
 404 判定顺序（逐级）：
 1. run_not_found            — gold_backtest_runs 无此 run
-2. unsupported_strategy_type — run 的 strategy_type 不在 DSL/MultiFactor/Combo
-  白名单（先查 run 类型再查明细行；StaticTopN 直落此态）
+2. unsupported_strategy_type — run 的 strategy_type 不在 DSL/MultiFactor
+  白名单（Combo 无 last_score_detail 能力，评审 I1 后移出）（先查 run 类型再查明细行；StaticTopN 直落此态）
 3. no_signal_details        — run 存在、类型支持但明细表无行（旧 run / 落盘失败）
 
 夹具：tmp catalog 直接插 gold_backtest_runs / gold_bt_signal_details 行

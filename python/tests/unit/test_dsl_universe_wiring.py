@@ -59,11 +59,19 @@ class TestResolveRequestUniverse:
                         == legacy
                     ), (body_u, parsed, dsl)
 
-    def test_invalid_preset_passthrough(self) -> None:
-        """无效 preset 名原样传入 resolve_universe（沿既有默认分支行为）。"""
-        assert (
+    def test_invalid_preset_rejected_400(self) -> None:
+        """无效 preset 名在请求层拦截（引擎会静默回退全市场，typo 危险）。"""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
             bt_routes._resolve_request_universe("all", {"universe": "nope"}, {})
-            == "nope"
+        assert ei.value.status_code == 400
+        assert "nope" in ei.value.detail
+
+    def test_valid_preset_passthrough(self) -> None:
+        assert (
+            bt_routes._resolve_request_universe("all", {"universe": "idx_hs300"}, {})
+            == "idx_hs300"
         )
 
 
@@ -162,10 +170,25 @@ class TestBacktestRouteUniverseWiring:
             c, monkeypatch, dsl_spec=dict(_DSL_SPEC), universe_id="szse"
         ) == "szse"
 
-    def test_invalid_preset_passed_through(self, client, monkeypatch) -> None:
+    def test_invalid_preset_rejected_at_request_time(self, client, monkeypatch) -> None:
+        """未知名在路由层 400（引擎会静默回退全市场，不能放行）。"""
         c, _ = client
-        spec = dict(_DSL_SPEC, universe="nope")
-        assert _post_capture(c, monkeypatch, dsl_spec=spec) == "nope"
+        real_run = bt_routes._run_backtest
+        monkeypatch.setattr(bt_routes, "_run_backtest", lambda catalog, spec: "unreachable")
+        try:
+            resp = c.post("/api/v1/backtests", json={
+                "strategy_id": "uni_wire",
+                "dataset_version": "v1",
+                "start_date": "2025-01-06",
+                "end_date": "2025-03-31",
+                "feature_set_version": "fsv_wire",
+                "strategy_type": "DSL",
+                "dsl_spec": dict(_DSL_SPEC, universe="nope"),
+            })
+            assert resp.status_code == 400
+            assert "nope" in resp.json()["detail"]
+        finally:
+            monkeypatch.setattr(bt_routes, "_run_backtest", real_run)
 
     def test_saved_config_dsl_spec_universe_used(
         self, client, monkeypatch

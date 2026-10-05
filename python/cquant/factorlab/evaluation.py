@@ -364,7 +364,12 @@ class FactorEvaluator:
         for d in sorted_dates:
             day = factors.filter(pl.col("trade_date") == d).drop_nulls([self.factor_col])
             n_daily = len(day)
-            today = day.sort(self.factor_col, descending=True).head(max(1, int(top_pct * n_daily)))
+            # Secondary key (asset_id) makes tie-breaking at the quantile edge
+            # deterministic across polars versions instead of row-order luck.
+            today = (
+                day.sort([self.factor_col, "asset_id"], descending=[True, False])
+                .head(max(1, int(top_pct * n_daily)))
+            )
             top_assets = set(today["asset_id"].to_list())
 
             if prev_top is not None and len(top_assets) > 0:

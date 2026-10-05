@@ -31,6 +31,7 @@
 | 2026-05-22 | Phase 0-B | Vibe-Trading 集成：526 因子（qlib158+alpha101+gtja191）、引擎对比文档、Swarm 加载器（29 团队）、LLM 供应商适配器（14 供应商） |
 | 2026-06-02 | Phase 5 | Research UX：DataTable 组件、Factor DSL（parser+evaluator+16 函数）、FactorDSLEditor（Monaco）、策略版本管理（50 版本+回滚）、fills 分页、自动过拟合分析、ScoringPage 改进（分布图+CSV 导出）、ML 模型→策略导航、Monaco chunk 分离、响应式布局 |
 | 2026-10-04 | Wiring batch1 | A1 财务 PIT 收口（D4-A 固定截止日+回填+端点）/ B4a gold_positions 修复（DDL+落盘+三端点恢复） |
+| 2026-10-05 | Wiring batch2 | B1 Brinson 归因读侧（端点三态+tab+DDL 归位）/ B2 信号明细（gold_bt_signal_details 落盘+端点+tab） |
 | 2026-10-05 | Wiring batch3 | A2 Combo 混编（透传/深度/抛错）/ A3 双轨统一（Top20%+v2 标记+missing 枚举+死代码）/ B4b 持仓可视化 / B3 研报 markdown 渲染 / A4 universe 接线 |
 
 ---

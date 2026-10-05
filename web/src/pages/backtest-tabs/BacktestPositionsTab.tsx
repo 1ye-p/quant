@@ -115,11 +115,16 @@ export function BacktestPositionsTab() {
       // Stable key order: __other__ last, others by first-appearance
       const ordered = [...keys].filter(k => k !== '__other__')
       if (keys.has('__other__')) ordered.push('__other__')
-      return { chartRows: rows, stackKeys: ordered }
+      // Same churn issue as the industry view: absent key = weight 0.
+      const filled = rows.map(row => ({
+        date: row.date,
+        ...Object.fromEntries(ordered.map(k => [k, Number(row[k] ?? 0)])),
+      }))
+      return { chartRows: filled, stackKeys: ordered }
     }
     const points = industryPoints(data)
     const keys = new Set<string>()
-    const rows = points.map(p => {
+    const raw = points.map(p => {
       const row: Record<string, number | string> = { date: p.trade_date }
       for (const [industry, w] of Object.entries(p.weights)) {
         keys.add(industry)
@@ -127,7 +132,15 @@ export function BacktestPositionsTab() {
       }
       return row
     })
-    return { chartRows: rows, stackKeys: [...keys].sort() }
+    // Top-N membership churns day to day — a key absent from a given day must
+    // read as weight 0, not undefined, or the Recharts stack breaks/gaps at
+    // those indices instead of summing to ~100%.
+    const stackKeys = [...keys].sort()
+    const rows = raw.map(row => ({
+      date: row.date,
+      ...Object.fromEntries(stackKeys.map(k => [k, Number(row[k] ?? 0)])),
+    }))
+    return { chartRows: rows, stackKeys }
   }, [chartQuery.data, metric])
 
   const windowedRows = useMemo(() => applyWindow(chartRows, win), [chartRows, win])

@@ -291,15 +291,29 @@ def _resolve_request_universe(
     3. 否则沿既有逻辑取策略配置的 ``universe_id``（默认 "all"）。
 
     dsl_spec 为 None / universe 为 "all" 时与旧表达式 bit-for-bit 一致。
-    无效 preset 名不在路由层拦截：``resolve_universe`` 对未知名字走默认
-    全市场分支（等同 "all"），沿引擎既有行为。
+    未知 preset 名在此拦截并返回 400：引擎的 ``resolve_universe`` 对未知
+    名字静默回退全市场，typo（如 "hs300" 应为 "idx_hs300"）会在错误的
+    股票池上跑出看似合理的结果——正是 A2 批次要消除的静默错行为类别。
     """
     if body_universe_id != "all":
-        return body_universe_id
-    dsl_universe = (dsl_spec or {}).get("universe", "all")
-    if dsl_universe != "all":
-        return dsl_universe
-    return parsed.get("universe_id", "all")
+        resolved = body_universe_id
+    else:
+        dsl_universe = (dsl_spec or {}).get("universe", "all")
+        resolved = dsl_universe if dsl_universe != "all" else parsed.get("universe_id", "all")
+
+    if resolved != "all":
+        from cquant.backtest_vector.universe import UNIVERSE_PRESETS
+
+        if resolved not in UNIVERSE_PRESETS:
+            valid = ", ".join(sorted(UNIVERSE_PRESETS))
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"未知股票池 '{resolved}'。引擎会对未知名静默回退全市场，"
+                    f"已在请求层拦截。可选值: all, {valid}"
+                ),
+            )
+    return resolved
 
 
 def _validate_factor_weights(
@@ -1241,7 +1255,9 @@ async def get_backtest_attribution(run_id: str, catalog: CatalogDep) -> dict:
 
 #: Strategy types whose runs can carry gold_bt_signal_details rows (B2).
 #: StaticTopN / ML / neutral etc. never expose per-factor score detail.
-_SIGNAL_DETAIL_STRATEGY_TYPES = {"DSL", "MultiFactor", "Combo"}
+# CompositeStrategy (Combo) 不在此列：它不产出 last_score_detail 分项，
+# 白名单它会让每个 Combo 回测都 404 且提示误导（B1/B2 评审 I1）。
+_SIGNAL_DETAIL_STRATEGY_TYPES = {"DSL", "MultiFactor"}
 
 
 @router.get("/{run_id}/signals")

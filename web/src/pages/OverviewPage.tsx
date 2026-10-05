@@ -245,12 +245,12 @@ export function OverviewPage() {
                     <td className="py-1 font-mono truncate max-w-[100px]" title={f.factor_name}>
                       {f.factor_name}
                     </td>
-                    <td className={`py-1 text-right font-bold ${f.mean_ic > 0 ? 'text-green-600' : 'text-red-500'}`}>
-                      {f.mean_ic.toFixed(4)}
+                    <td className={`py-1 text-right font-bold ${(f.ic_mean ?? 0) > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                      {f.ic_mean != null ? f.ic_mean.toFixed(4) : '—'}
                     </td>
-                    <td className="py-1 text-right text-gray-600">{f.ir?.toFixed(2) ?? '—'}</td>
+                    <td className="py-1 text-right text-gray-600">{f.icir != null ? f.icir.toFixed(2) : '—'}</td>
                     <td className="py-1 text-right text-gray-600">
-                      {f.hit_rate != null ? `${(f.hit_rate * 100).toFixed(0)}%` : '—'}
+                      {f.ic_positive_pct != null ? `${(f.ic_positive_pct * 100).toFixed(0)}%` : '—'}
                     </td>
                   </tr>
                 ))}

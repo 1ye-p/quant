@@ -592,8 +592,15 @@ def _evaluate_ic_metrics(merged: pl.DataFrame, ret_name: str) -> tuple[list[dict
         )
         hl = ev.half_life(decay_ics_arr)
         summary["ic_half_life"] = round(float(hl), 2) if hl is not None else None
-    except Exception:
-        logger.debug("IC t-test / half-life computation skipped", exc_info=True)
+    except (ValueError, TypeError, KeyError, IndexError, FloatingPointError) as exc:
+        # A3-2 教训：此块曾用裸 except + debug 级吞掉 ic_ttest/half_life 的真实错误。
+        # 收紧为可预期异常类型 + warning 级，保留栈上下文；其余异常向上传播。
+        logger.warning(
+            "IC t-test / half-life computation failed for %s: %s",
+            getattr(ev, "factor_name", "<unknown>"),
+            exc,
+            exc_info=True,
+        )
 
     return series, summary
 

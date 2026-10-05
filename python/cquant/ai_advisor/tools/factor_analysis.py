@@ -88,7 +88,6 @@ class FactorAnalysisTool(AdvisorTool):
                 ret_df = ctx.catalog.query(ret_query, [factor_name])
                 if not ret_df.is_empty() and "fwd_return_1d" in ret_df.columns:
                     from cquant.factorlab.evaluation import FactorEvaluator
-                    import polars as pl
 
                     evaluator = FactorEvaluator(
                         factor_col="factor_value",
@@ -98,7 +97,7 @@ class FactorAnalysisTool(AdvisorTool):
                     )
                     merged = df.join(ret_df, on=["asset_id", "trade_date"], how="inner")
                     if not merged.is_empty():
-                        ic_df = evaluator.ic_timeseries(merged)
+                        ic_df = evaluator.ic_series(df, ret_df)
                         if not ic_df.is_empty():
                             mean_ic = ic_df["ic"].mean()
                             std_ic = ic_df["ic"].std()
@@ -109,7 +108,7 @@ class FactorAnalysisTool(AdvisorTool):
                             parts.append(f"- IC IR:   {ic_ir:.4f}")
                             parts.append(f"- IC > 0 ratio: {(ic_df['ic'] > 0).mean():.2%}")
             except Exception as exc:
-                logger.debug("IC computation skipped: %s", exc)
+                logger.warning("IC computation failed for %s: %s", factor_name, exc)
                 parts.append(f"\n_IC computation unavailable: {exc}_")
 
             # 3. Top/bottom quantile spread

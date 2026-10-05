@@ -20,9 +20,10 @@ export const dashboardApi = {
     api.get<{
       items: {
         factor_name: string
-        mean_ic: number
-        ir: number
-        hit_rate: number
+        ic_mean: number | null
+        icir: number | null
+        ic_positive_pct: number | null
+        n?: number | null
         /** IC 口径版本：'v2_top20' = Top20% 截面口径；null = 历史行（Top100） */
         algo_version?: string | null
       }[]

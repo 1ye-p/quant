@@ -37,12 +37,15 @@ vi.mock('@/lib/api', () => ({
 const icLeaderboardMock = vi.mocked(dashboardApi.icLeaderboard)
 
 function leaderboardItems(versions: (string | null)[]) {
+  // Mock shape matches the real /factors/ic-leaderboard contract:
+  // ic_mean / icir / ic_positive_pct (not mean_ic/ir/hit_rate)
   return {
     items: versions.map((v, i) => ({
       factor_name: `factor_${i}`,
-      mean_ic: 0.1 - i * 0.01,
-      ir: 1.5 - i * 0.1,
-      hit_rate: 0.6,
+      ic_mean: 0.1 - i * 0.01,
+      icir: 1.5 - i * 0.1,
+      ic_positive_pct: 0.6,
+      n: 100,
       algo_version: v,
     })),
   }
@@ -76,5 +79,16 @@ describe('OverviewPage', () => {
     renderWithProviders(<OverviewPage />)
     await screen.findByText('factor_0')
     expect(screen.queryByText(/口径混合/)).not.toBeInTheDocument()
+  })
+
+  it('renders leaderboard numeric values for non-empty items (real contract keys)', async () => {
+    icLeaderboardMock.mockResolvedValue(leaderboardItems(['v2_top20', 'v2_top20']) as never)
+    renderWithProviders(<OverviewPage />)
+    await screen.findByText('factor_0')
+    // ic_mean 0.1 -> "0.1000"; icir 1.5 -> "1.50"; ic_positive_pct 0.6 -> "60%"
+    expect(screen.getByText('0.1000')).toBeInTheDocument()
+    expect(screen.getByText('0.0900')).toBeInTheDocument()
+    expect(screen.getAllByText('1.50').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('60%').length).toBeGreaterThan(0)
   })
 })

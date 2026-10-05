@@ -18,7 +18,14 @@ export const dashboardApi = {
 
   icLeaderboard: (limit = 5, config?: RequestConfig) =>
     api.get<{
-      items: { factor_name: string; mean_ic: number; ir: number; hit_rate: number }[]
+      items: {
+        factor_name: string
+        mean_ic: number
+        ir: number
+        hit_rate: number
+        /** IC 口径版本：'v2_top20' = Top20% 截面口径；null = 历史行（Top100） */
+        algo_version?: string | null
+      }[]
     }>(`/factors/ic-leaderboard?limit=${limit}`, config),
 
   backtestTrend: (days = 30, config?: RequestConfig) =>

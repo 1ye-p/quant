@@ -124,6 +124,11 @@ export function OverviewPage() {
   const completedRuns = backtests?.items.filter(r => r.status === 'completed').length ?? 0
   const runningStrategies = liveStrategies?.items.length ?? 0
 
+  // IC 榜单口径混合检测（A3-3）：同时存在历史行（algo_version=NULL，Top100）
+  // 与新口径行（'v2_top20'）时提示；全 NULL 或全 v2 不提示
+  const mixedIcVersions = !!icBoard?.items.some(i => i.algo_version)
+    && !!icBoard?.items.some(i => !i.algo_version)
+
   const btSparkData = backtestTrend?.items.map(i => i.count) ?? []
   const icSparkData = icTrend?.items.map(i => i.avg_ic) ?? []
 
@@ -215,6 +220,11 @@ export function OverviewPage() {
         {/* Top5 因子 IC */}
         <div className="card">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">{t('page.overview.section.ic_leaderboard')}</h3>
+          {mixedIcVersions && (
+            <div className="mb-2 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700" role="alert">
+              {t('page.overview.ic.mixed_versions')}
+            </div>
+          )}
           {icBoardStatus === 'error' ? (
             <p className="text-xs text-red-500">{(icBoardError as Error).message}</p>
           ) : icBoard?.items.length ? (

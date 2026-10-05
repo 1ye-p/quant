@@ -165,7 +165,7 @@ def test_ic_summary_ddl_loaded_by_catalog_initialize(tmp_path) -> None:
     )["column_name"].to_list()
     assert cols == [
         "factor_name", "ic_mean", "icir", "ic_positive_pct", "n",
-        "window_start", "window_end", "updated_at",
+        "window_start", "window_end", "updated_at", "algo_version",
     ]
     cat.close()
 
@@ -189,3 +189,107 @@ def test_ensure_ic_summary_table_loads_from_sql_file(tmp_path) -> None:
     assert cols, "ensure path must create the table from sql/duckdb/factors.sql"
     assert "factor_name" in cols and "updated_at" in cols
     factors_routes._ic_summary_table_ensured = False
+
+
+# ── A3-3: algo_version 版本标记（v2_top20 口径） ─────────────────────────────
+
+def test_ic_algo_version_constant() -> None:
+    """IC 口径版本常量：Top20% 截面口径（A3-1/2 统一后的当前版本）。"""
+    assert factors_routes.IC_ALGO_VERSION == "v2_top20"
+
+
+def test_compute_ic_tags_algo_version(catalog: StubCatalog) -> None:
+    """新算行带 algo_version='v2_top20'。"""
+    _seed_ic_data(catalog)
+    catalog.execute(
+        "INSERT INTO meta_factor_analytics "
+        "(job_id, factor_name, feature_set_version, horizon_days, status, submitted_at) "
+        "VALUES ('job_v2', 'test_factor', 'fsv_test', 1, 'pending', '2024-01-01')"
+    )
+    body = factors_routes.ICComputeBody(
+        factor_name="test_factor", feature_set_version="fsv_test", horizon_days=1
+    )
+    factors_routes._compute_ic("job_v2", body, catalog)
+
+    rows = catalog.query("SELECT algo_version FROM gold_factor_ic_summary").to_dicts()
+    assert rows == [{"algo_version": "v2_top20"}]
+
+
+def test_historical_null_algo_version_preserved(catalog: StubCatalog) -> None:
+    """历史行 algo_version 为 NULL——重算其它因子不回填、不覆盖。"""
+    factors_routes._ensure_ic_summary_table(catalog)
+    catalog.execute(
+        "INSERT INTO gold_factor_ic_summary "
+        "(factor_name, ic_mean, icir, ic_positive_pct, n, updated_at) "
+        "VALUES ('legacy_factor', 0.05, 1.2, 0.6, 100, NOW())"
+    )
+
+    _seed_ic_data(catalog)
+    catalog.execute(
+        "INSERT INTO meta_factor_analytics "
+        "(job_id, factor_name, feature_set_version, horizon_days, status, submitted_at) "
+        "VALUES ('job_new', 'test_factor', 'fsv_test', 1, 'pending', '2024-01-01')"
+    )
+    factors_routes._compute_ic(
+        "job_new",
+        factors_routes.ICComputeBody(
+            factor_name="test_factor", feature_set_version="fsv_test", horizon_days=1
+        ),
+        catalog,
+    )
+
+    rows = {
+        r["factor_name"]: r["algo_version"]
+        for r in catalog.query(
+            "SELECT factor_name, algo_version FROM gold_factor_ic_summary"
+        ).to_dicts()
+    }
+    assert rows["legacy_factor"] is None
+    assert rows["test_factor"] == "v2_top20"
+
+
+def test_leaderboard_returns_algo_version(catalog: StubCatalog) -> None:
+    """ic-leaderboard SELECT 透传 algo_version 到前端。"""
+    _seed_ic_data(catalog)
+    catalog.execute(
+        "INSERT INTO meta_factor_analytics "
+        "(job_id, factor_name, feature_set_version, horizon_days, status, submitted_at) "
+        "VALUES ('job_lb', 'test_factor', 'fsv_test', 1, 'pending', '2024-01-01')"
+    )
+    factors_routes._compute_ic(
+        "job_lb",
+        factors_routes.ICComputeBody(
+            factor_name="test_factor", feature_set_version="fsv_test", horizon_days=1
+        ),
+        catalog,
+    )
+    lb = asyncio.run(factors_routes.ic_leaderboard(catalog=catalog, limit=5))
+    assert lb["items"], "leaderboard 应有刚计算的因子"
+    assert lb["items"][0]["algo_version"] == "v2_top20"
+
+
+def test_ensure_adds_algo_version_to_stale_table(catalog: StubCatalog) -> None:
+    """旧库兜底：表存在但无 algo_version 列 → ensure 路径 ALTER 补列，upsert 可写。"""
+    catalog.execute(
+        "CREATE TABLE gold_factor_ic_summary ("
+        "factor_name VARCHAR PRIMARY KEY, ic_mean DOUBLE, icir DOUBLE,"
+        "ic_positive_pct DOUBLE, n INTEGER, window_start DATE, window_end DATE,"
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+    )
+    factors_routes._ic_summary_table_ensured = False
+    factors_routes._ensure_ic_summary_table(catalog)
+
+    cols = catalog.query(
+        "SELECT column_name FROM duckdb_columns() "
+        "WHERE table_name = 'gold_factor_ic_summary'"
+    )["column_name"].to_list()
+    assert "algo_version" in cols, "ensure 路径应为旧库补 algo_version 列"
+
+    # 补列后 upsert 正常写入
+    factors_routes._upsert_ic_summary(
+        catalog, "stale_factor", 0.1, 0.5, 0.6, 10, None, None
+    )
+    row = catalog.query(
+        "SELECT algo_version FROM gold_factor_ic_summary WHERE factor_name = 'stale_factor'"
+    ).to_dicts()[0]
+    assert row["algo_version"] == "v2_top20"

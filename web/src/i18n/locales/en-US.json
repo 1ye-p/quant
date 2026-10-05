@@ -2769,7 +2769,8 @@
           "ic": "IC",
           "ir": "IR"
         },
-        "empty": "No IC records"
+        "empty": "No IC records",
+        "mixed_versions": "⚠ Mixed calibers (legacy Top100 / new Top20%) — compare with care"
       },
       "trend": {
         "empty": "No trend data"

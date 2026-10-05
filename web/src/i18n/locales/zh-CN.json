@@ -2769,7 +2769,8 @@
           "ic": "IC",
           "ir": "IR"
         },
-        "empty": "暂无 IC 记录"
+        "empty": "暂无 IC 记录",
+        "mixed_versions": "⚠ 口径混合（历史 Top100 / 新 Top20%），横向对比请谨慎"
       },
       "trend": {
         "empty": "暂无趋势数据"

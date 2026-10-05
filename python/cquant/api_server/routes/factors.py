@@ -47,6 +47,10 @@ def _ensure_custom_factor_table(catalog) -> None:
 
 _ic_summary_table_ensured = False
 
+# IC 口径版本（A3-3）：'v2_top20' = Top20% 截面口径（A3-1/2 统一后的当前版本）。
+# 历史行为 NULL（旧 Top100 口径）——前端据此对混合口径榜单出提示，不回填。
+IC_ALGO_VERSION = "v2_top20"
+
 # DDL lives in sql/duckdb/factors.sql (loaded by Catalog.initialize()); the
 # ensure below is the belt-and-braces path for catalogs that were initialized
 # before that file existed. Resolution mirrors Catalog.initialize().
@@ -85,6 +89,13 @@ def _ensure_ic_summary_table(catalog) -> None:
 
         for stmt in _split_statements(ddl):
             catalog.execute(stmt)
+        # 双保险（A3-3）：旧库 CREATE TABLE IF NOT EXISTS 为 no-op、缺 algo_version
+        # 列时，显式 ALTER 补列（参考 catalog._try_alter_add_column 的自愈语义，
+        # 但这里在写入前主动补，而非等报错后兜底）。
+        catalog.execute(
+            "ALTER TABLE gold_factor_ic_summary "
+            "ADD COLUMN IF NOT EXISTS algo_version VARCHAR"
+        )
         _ic_summary_table_ensured = True
     except Exception as exc:
         logger.debug("_ensure_ic_summary_table: %s", exc)
@@ -106,8 +117,8 @@ def _upsert_ic_summary(
         catalog.execute(
             """
             INSERT INTO gold_factor_ic_summary
-                (factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                (factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end, updated_at, algo_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
             ON CONFLICT (factor_name) DO UPDATE SET
                 ic_mean = excluded.ic_mean,
                 icir = excluded.icir,
@@ -115,9 +126,10 @@ def _upsert_ic_summary(
                 n = excluded.n,
                 window_start = excluded.window_start,
                 window_end = excluded.window_end,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                algo_version = excluded.algo_version
             """,
-            [factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end],
+            [factor_name, ic_mean, icir, ic_positive_pct, n, window_start, window_end, IC_ALGO_VERSION],
         )
     except Exception as exc:
         logger.warning("upsert gold_factor_ic_summary failed for %s: %s", factor_name, exc)
@@ -1083,7 +1095,7 @@ async def ic_leaderboard(catalog: CatalogDep, limit: int = 5) -> dict:
     try:
         df = catalog.query(
             "SELECT factor_name, ic_mean, icir, ic_positive_pct, n, "
-            "window_start, window_end, updated_at "
+            "window_start, window_end, updated_at, algo_version "
             "FROM gold_factor_ic_summary "
             "WHERE ic_mean IS NOT NULL "
             "ORDER BY ABS(ic_mean) DESC LIMIT ?",

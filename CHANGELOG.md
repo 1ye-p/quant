@@ -7,6 +7,19 @@
 
 ## [Unreleased]
 
+### Wiring Batch 3 — 2026-10-05
+
+**IC / 换手率口径统一 Top20%（A3/D1）**
+- IC 与换手率计算统一收敛到 Top20% 分位口径（分母 = 当日截面），evaluator 为单一实现（IC 路由复用 `FactorEvaluator`，不再各自维护）
+- `ic_summary` 新增 `algo_version` 标记（`v2_top20`），区分新旧口径；历史行不回溯重算
+
+**⚠️ 破坏性变更：StaticTopN 默认回退移除（A2）**
+- 未知/缺失的 `strategy_type` 不再静默回退到 StaticTopN，现在直接抛错——配置需显式声明 type
+- Combo 子策略支持透传与深度限制（混编 end-to-end），不再有静默降级路径
+
+**范围差异说明**
+- A3-5：`lib/vibe-trading` SKILL.md 未改动——属上游自身方法论文档，遵循子模块不改上游源码规则（bridge/开发分支优先）
+
 ### 引擎修复 B2：universe resolver 锚定 + 指数排除，IC 过滤 — 2026-09-23
 
 **修复（高危 B2，联合评审发现）**

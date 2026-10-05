@@ -257,6 +257,23 @@ export const backtestsApi = {
       config,
     ),
 
+  /**
+   * Point-in-time positions series for charting (B4b). `metric` selects the
+   * payload shape (`weight` per-asset with `__other__` rollup, or `industry`
+   * aggregated sums). Tri-state 404 body `{reason}` — `run_not_found` /
+   * `no_position_data` (legacy run without persisted positions).
+   */
+  getPositionsSeries: (
+    id: string,
+    metric: 'weight' | 'industry',
+    topN = 10,
+    config?: RequestConfig,
+  ) =>
+    api.get<BacktestPositionsSeries>(
+      `/backtests/${id}/positions-series?metric=${metric}&top_n=${topN}`,
+      config,
+    ),
+
   /** Multi-dimensional strategy ranking across runs (T7). */
   rank: (
     body: { run_ids: string[]; weights?: Record<string, number> },
@@ -343,6 +360,49 @@ export interface BacktestSignalDetailsPage {
   total: number
   page: number
   page_size: number
+}
+
+// ── Positions series types (B4b) ─────────────────────────────────────────────
+
+export interface BacktestWeightPosition {
+  asset_id: string
+  weight: number | null
+  industry: string | null
+}
+
+export interface BacktestWeightPoint {
+  trade_date: string
+  positions: BacktestWeightPosition[]
+}
+
+export interface BacktestIndustryPoint {
+  trade_date: string
+  weights: Record<string, number>
+}
+
+/**
+ * Dual-shape payload — `metric` discriminates: only `weightPoints()` /
+ * `industryPoints()` (below) should be used to read `series` type-safely.
+ */
+export interface BacktestPositionsSeries {
+  run_id: string
+  metric: 'weight' | 'industry'
+  top_n: number
+  series: unknown
+}
+
+/** Narrow a weight-metric payload to its points (empty for industry / unset). */
+export function weightPoints(data: BacktestPositionsSeries | undefined | null): BacktestWeightPoint[] {
+  return data?.metric === 'weight' && Array.isArray(data.series)
+    ? (data.series as BacktestWeightPoint[])
+    : []
+}
+
+/** Narrow an industry-metric payload to its points (empty for weight / unset). */
+export function industryPoints(data: BacktestPositionsSeries | undefined | null): BacktestIndustryPoint[] {
+  return data?.metric === 'industry' && Array.isArray(data.series)
+    ? (data.series as BacktestIndustryPoint[])
+    : []
 }
 
 // ── Regime timeline / ranking types ─────────────────────────────────────────

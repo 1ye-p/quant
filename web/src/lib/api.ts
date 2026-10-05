@@ -40,7 +40,7 @@ export type {
 
 export { dashboardApi } from './api/dashboard'
 
-export { backtestsApi, backtestExtApi } from './api/backtests'
+export { backtestsApi, backtestExtApi, weightPoints, industryPoints } from './api/backtests'
 export type {
   WalkForwardConfig,
   BacktestRun,
@@ -52,6 +52,10 @@ export type {
   BacktestSignalDates,
   BacktestSignalItem,
   BacktestSignalDetailsPage,
+  BacktestPositionsSeries,
+  BacktestWeightPoint,
+  BacktestWeightPosition,
+  BacktestIndustryPoint,
 } from './api/backtests'
 
 export { knowledgeApi } from './api/knowledge'

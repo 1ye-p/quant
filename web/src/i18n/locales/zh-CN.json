@@ -2454,7 +2454,8 @@
         "regime_timeline": "Regime 时间线",
         "report": "AI 研报",
         "attribution": "归因",
-        "signals": "信号"
+        "signals": "信号",
+        "positions": "持仓"
       },
       "no_benchmark_hint": "未设置基准",
       "validation": {
@@ -2603,6 +2604,31 @@
         "missing_factors_hint": "以下因子在回测区间无已物化数据，打分时已跳过：",
         "persist_failed_title": "信号明细落盘失败",
         "persist_failed_hint": "本次回测未持久化信号明细（回测结果本身不受影响）。"
+      },
+      "positions": {
+        "reason": {
+          "run_not_found": "回测运行不存在",
+          "run_not_found_hint": "该运行 ID 无效或已被清理，请从回测列表重新进入。",
+          "no_position_data": "该回测无持仓数据",
+          "no_position_data_hint": "为旧版本运行，未持久化每日持仓；重新运行回测后将自动记录。"
+        },
+        "view_weight": "个股权重",
+        "view_industry": "板块聚合",
+        "top_n_label": "Top N",
+        "top_n_hint": "Top-N 按权重原值降序取前 N 只（当前多头场景），其余合并为「其他」。",
+        "window_label": "时间窗口",
+        "window_all": "全期",
+        "window_half": "后半区间",
+        "window_quarter": "末 1/4 区间",
+        "industry_granularity_note": "分组为上市板块粒度（主板/创业板/科创板/北交所），非申万行业分类。",
+        "latest_title": "当前持仓",
+        "latest_date": "截至 {{date}}",
+        "col_asset": "代码",
+        "col_weight": "权重",
+        "col_industry": "板块",
+        "other": "其他",
+        "unknown": "未知",
+        "empty": "无持仓记录"
       },
       "attribution": {
         "summary_title": "Brinson 归因总览",

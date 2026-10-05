@@ -2454,7 +2454,8 @@
         "regime_timeline": "Regime Timeline",
         "report": "AI Report",
         "attribution": "Attribution",
-        "signals": "Signals"
+        "signals": "Signals",
+        "positions": "Positions"
       },
       "no_benchmark_hint": "No benchmark set",
       "validation": {
@@ -2603,6 +2604,31 @@
         "missing_factors_hint": "The following factors had no materialized data in the backtest window and were skipped during scoring:",
         "persist_failed_title": "Signal detail persistence failed",
         "persist_failed_hint": "Signal details were not persisted for this run (backtest results are unaffected)."
+      },
+      "positions": {
+        "reason": {
+          "run_not_found": "Backtest run not found",
+          "run_not_found_hint": "This run ID is invalid or has been cleaned up. Re-enter from the backtests list.",
+          "no_position_data": "No position data for this run",
+          "no_position_data_hint": "This is a legacy run without persisted daily positions; re-run the backtest to record them."
+        },
+        "view_weight": "Asset Weights",
+        "view_industry": "Sector Aggregate",
+        "top_n_label": "Top N",
+        "top_n_hint": "Top-N takes the first N assets by raw weight, descending (current long-only context); the rest roll into \"Other\".",
+        "window_label": "Window",
+        "window_all": "Full period",
+        "window_half": "Second half",
+        "window_quarter": "Last quarter",
+        "industry_granularity_note": "Grouped by listing board (Main / ChiNext / STAR / BSE), not by SW industry classification.",
+        "latest_title": "Current Holdings",
+        "latest_date": "as of {{date}}",
+        "col_asset": "Asset",
+        "col_weight": "Weight",
+        "col_industry": "Board",
+        "other": "Other",
+        "unknown": "Unknown",
+        "empty": "No positions recorded"
       },
       "attribution": {
         "summary_title": "Brinson Attribution Overview",

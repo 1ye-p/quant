@@ -19,6 +19,8 @@ export const queryKeys = {
     signalDates: (id: string) => ['backtests', id, 'signals-dates'] as const,
     signalDetails: (id: string, date: string, page: number, pageSize: number) =>
       ['backtests', id, 'signals', date, page, pageSize] as const,
+    positionsSeries: (id: string, metric: 'weight' | 'industry', topN: number) =>
+      ['backtests', id, 'positions-series', metric, topN] as const,
     risk: (id: string) => ['backtests', id, 'risk'] as const,
     tearsheet: (id: string) => ['backtests', id, 'tearsheet'] as const,
     validationWindows: (id: string) => ['backtests', id, 'validation-windows'] as const,

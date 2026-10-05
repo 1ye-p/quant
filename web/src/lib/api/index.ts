@@ -32,7 +32,7 @@ export {
 } from './client'
 
 // Domain APIs
-export { backtestsApi, backtestExtApi } from './backtests'
+export { backtestsApi, backtestExtApi, weightPoints, industryPoints } from './backtests'
 export type {
   WalkForwardConfig,
   BacktestRun,
@@ -44,6 +44,10 @@ export type {
   BacktestSignalDates,
   BacktestSignalItem,
   BacktestSignalDetailsPage,
+  BacktestPositionsSeries,
+  BacktestWeightPoint,
+  BacktestWeightPosition,
+  BacktestIndustryPoint,
 } from './backtests'
 
 export { mlApi } from './ml'

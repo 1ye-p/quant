@@ -29,6 +29,7 @@ import polars as pl
 from cquant.backtest_vector.costs import CostModel
 from cquant.backtest_vector.fees import FeeModel, apply_fee_model
 from cquant.backtest_vector.fill_simulator import AShareFillSimulator
+from cquant.backtest_vector.limit_rules import get_limit_pct
 from cquant.backtest_vector.metrics import BacktestMetrics, compute_metrics
 from cquant.backtest_vector.strategy import Strategy, StrategyContext
 from cquant.core.enums import EngineType, OrderSide, RiskDecisionType
@@ -1342,10 +1343,17 @@ class VectorBacktestEngine:
         prices: pl.DataFrame,
         td: date,
     ) -> pl.DataFrame | None:
-        """Build a tradability DataFrame for the given date.
+        """Build a tradability DataFrame for the given date (vectorized).
 
         Computes ``is_limit_up`` and ``is_limit_down`` columns from price data
         and includes the existing ``is_suspended`` column if present.
+
+        Vectorized rewrite of the former per-asset filter loop, gated
+        bit-for-bit by the perf_equiv fixtures (synthetic + real_sample):
+        same ``get_limit_pct`` board path (every exchange-prefixed id → MAIN
+        ±10% — no ST branch, replicated as-is), same ``-0.005`` absolute
+        band, same ``close == high`` / ``close == low`` joint conditions,
+        assets without a prev_close keep default-False flags.
 
         Returns
         -------
@@ -1354,8 +1362,6 @@ class VectorBacktestEngine:
             is_limit_up, is_limit_down]`` for *td*, or ``None`` if the
             ``is_suspended`` column is absent from *prices*.
         """
-        from cquant.backtest_vector.limit_rules import is_at_limit_down, is_at_limit_up
-
         if "is_suspended" not in prices.columns:
             logger.debug("Tradability filtering disabled: 'is_suspended' column not in prices")
             return None
@@ -1364,29 +1370,57 @@ class VectorBacktestEngine:
         if today_prices.is_empty():
             return None
 
-        # Gather previous-day close for each asset
-        prev_prices = prices.filter(pl.col("trade_date") < td)
+        # Last close strictly before *td* per asset — one group-by scan
+        # replaces the per-asset filter loop (O(N) instead of O(N^2)).
+        prev_close = (
+            prices.filter(pl.col("trade_date") < td)
+            .group_by("asset_id")
+            .agg(
+                pl.col("close").cast(pl.Float64)
+                .sort_by("trade_date").last().alias("prev_close")
+            )
+        )
 
-        limit_up_ids: set[str] = set()
-        limit_down_ids: set[str] = set()
+        # Per-asset limit pct via the same detect_board path the loop used.
+        limit_pct_map = {
+            aid: get_limit_pct(aid, False)
+            for aid in today_prices["asset_id"].unique().to_list()
+        }
 
-        for row in today_prices.iter_rows(named=True):
-            aid = row["asset_id"]
-            close = row["close"]
-            prev = prev_prices.filter(pl.col("asset_id") == aid).sort("trade_date").tail(1)
-            if prev.is_empty():
-                continue
-            prev_close = prev["close"][0]
+        close = pl.col("close").cast(pl.Float64)
+        high = pl.col("high").cast(pl.Float64)
+        low = pl.col("low").cast(pl.Float64)
+        pct = pl.col("asset_id").replace_strict(limit_pct_map, return_dtype=pl.Float64)
+        prev = pl.col("prev_close")
 
-            if is_at_limit_up(float(close), float(prev_close), aid) and close == row["high"]:
-                limit_up_ids.add(aid)
-            if is_at_limit_down(float(close), float(prev_close), aid) and close == row["low"]:
-                limit_down_ids.add(aid)
-
-        return today_prices.select(["trade_date", "asset_id", "is_suspended"]).with_columns([
-            pl.col("asset_id").is_in(list(limit_up_ids)).alias("is_limit_up"),
-            pl.col("asset_id").is_in(list(limit_down_ids)).alias("is_limit_down"),
-        ])
+        return (
+            today_prices
+            .select(["trade_date", "asset_id", "is_suspended", "close", "high", "low"])
+            .join(prev_close, on="asset_id", how="left")
+            .with_columns(
+                # prev null (asset has no row before td) → flag False,
+                # matching the loop's `continue` on empty prev.
+                (
+                    (close > 0)
+                    & (prev > 0)
+                    & (pct != 0.0)
+                    & (close >= prev * (1 + pct - 0.005))
+                    & (close == high)
+                )
+                .fill_null(False)
+                .alias("is_limit_up"),
+                (
+                    (close > 0)
+                    & (prev > 0)
+                    & (pct != 0.0)
+                    & (close <= prev * (1 - pct + 0.005))
+                    & (close == low)
+                )
+                .fill_null(False)
+                .alias("is_limit_down"),
+            )
+            .select(["trade_date", "asset_id", "is_suspended", "is_limit_up", "is_limit_down"])
+        )
 
     @staticmethod
     def _execute_forced_exit(

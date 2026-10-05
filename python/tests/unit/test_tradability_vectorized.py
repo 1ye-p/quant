@@ -152,6 +152,84 @@ def test_boundary_no_prior_history_all_flags_false() -> None:
 
 
 # ---------------------------------------------------------------------------
+# NaN semantics — Polars total ordering vs scalar-path float(nan) comparisons
+# ---------------------------------------------------------------------------
+
+def _nan_prices(nan_col: str) -> pl.DataFrame:
+    """Two-day frame where *nan_col* is NaN on the target day for ASSET_NAN.
+
+    All values are otherwise at the exact ±10% limit so that, without the
+    is_finite guards, Polars' total ordering (NaN > 0, NaN >= x, NaN == NaN)
+    would flag the row. The old per-asset scalar loop compared float(nan),
+    which is always False — so both flags must be False here.
+    """
+    nan = float("nan")
+    prev_day, td = date(2024, 1, 1), date(2024, 1, 2)
+    up = {"open": 11.0, "high": 11.0, "low": 9.0, "close": 11.0}   # == prev * 1.10
+    down = {"open": 9.0, "high": 11.0, "low": 9.0, "close": 9.0}   # == prev * 0.90
+    rows = []
+    for aid, ohlc in (("SSE:000001", up), ("SSE:000002", down)):
+        prev_row = {"asset_id": aid, "trade_date": prev_day, "is_suspended": False,
+                    "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0}
+        row = {"asset_id": aid, "trade_date": td, "is_suspended": False, **ohlc}
+        if nan_col in row and row[nan_col] is not None:
+            row[nan_col] = nan
+        rows.append(prev_row)
+        rows.append(row)
+    prices = pl.DataFrame(rows, schema_overrides={
+        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64, "close": pl.Float64})
+    if nan_col == "prev_close":
+        # Poison the previous day's close so prev_close for td is NaN.
+        prices = prices.with_columns(
+            pl.when(pl.col("trade_date") == prev_day)
+            .then(nan).otherwise(pl.col("close")).alias("close"))
+    return prices
+
+
+@pytest.mark.parametrize(
+    "nan_col,up_expected,down_expected",
+    [
+        # close / prev_close participate in BOTH flag comparisons → both False.
+        ("close", False, False),
+        ("prev_close", False, False),
+        # high only participates in the limit_up comparison (close == high);
+        # low only in limit_down (close == low) — old scalar semantics.
+        ("high", False, True),
+        ("low", True, False),
+    ],
+)
+def test_boundary_nan_inputs_flags_false(
+    nan_col: str, up_expected: bool, down_expected: bool
+) -> None:
+    """NaN in a comparison-participating column flips only the flags it fed.
+
+    Mirrors the old scalar loop: float(nan) comparisons (>, >=, <=, ==) are
+    all False, so NaN close/prev_close suppress both flags, NaN high only
+    suppresses limit_up, NaN low only suppresses limit_down. The vectorized
+    path must not let Polars' NaN total ordering (NaN > 0 etc.) flip these.
+    """
+    prices = _nan_prices(nan_col)
+    td = date(2024, 1, 2)
+    out = VectorBacktestEngine._build_tradability_today(prices, td)
+    assert out is not None
+    up_row = out.filter(pl.col("asset_id") == "SSE:000001")
+    down_row = out.filter(pl.col("asset_id") == "SSE:000002")
+    assert up_row.height == 1 and down_row.height == 1
+    assert up_row["is_limit_up"][0] is up_expected, f"{nan_col}=NaN limit_up"
+    assert down_row["is_limit_down"][0] is down_expected, f"{nan_col}=NaN limit_down"
+
+
+def test_boundary_nan_guards_do_not_affect_clean_limit_rows() -> None:
+    """Same frame without NaN: the ±10% rows still flag (guard is a no-op)."""
+    prices = _nan_prices("none")
+    td = date(2024, 1, 2)
+    out = VectorBacktestEngine._build_tradability_today(prices, td)
+    assert out is not None
+    assert out.filter(pl.col("asset_id") == "SSE:000001")["is_limit_up"][0]
+    assert out.filter(pl.col("asset_id") == "SSE:000002")["is_limit_down"][0]
+
+
+# ---------------------------------------------------------------------------
 # Real-sample suite — exact against committed fixture (catalog read-only)
 # ---------------------------------------------------------------------------
 

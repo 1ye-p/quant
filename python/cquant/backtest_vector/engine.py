@@ -1400,8 +1400,16 @@ class VectorBacktestEngine:
             .with_columns(
                 # prev null (asset has no row before td) → flag False,
                 # matching the loop's `continue` on empty prev.
+                # is_finite guards preserve the scalar-path NaN semantics:
+                # Polars uses total ordering (NaN > 0 / NaN >= x / NaN == NaN
+                # are all true), but float(nan) comparisons in the old
+                # per-asset loop were always False — any NaN participating
+                # column must force the flag to False.
                 (
-                    (close > 0)
+                    close.is_finite()
+                    & prev.is_finite()
+                    & high.is_finite()
+                    & (close > 0)
                     & (prev > 0)
                     & (pct != 0.0)
                     & (close >= prev * (1 + pct - 0.005))
@@ -1410,7 +1418,10 @@ class VectorBacktestEngine:
                 .fill_null(False)
                 .alias("is_limit_up"),
                 (
-                    (close > 0)
+                    close.is_finite()
+                    & prev.is_finite()
+                    & low.is_finite()
+                    & (close > 0)
                     & (prev > 0)
                     & (pct != 0.0)
                     & (close <= prev * (1 - pct + 0.005))

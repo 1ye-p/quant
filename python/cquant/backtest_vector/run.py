@@ -1194,7 +1194,18 @@ class BacktestRunner:
 
         return RegimeStateMachine(regime, MarketSeriesContext(self._catalog))
 
-    def _build_strategy(self, spec: BacktestRunSpec) -> Strategy:
+    def _build_strategy(self, spec: BacktestRunSpec, depth: int = 0) -> Strategy:
+        """Build a Strategy from spec.
+
+        depth = number of Combo ancestors (top-level = 0). Nested Combo
+        strategies beyond depth 3 are rejected (see Combo branch).
+        """
+        if spec.strategy_type == "StaticTopN":
+            return StaticTopNStrategy(
+                strategy_id=spec.strategy_id,
+                top_n=spec.top_n,
+                sort_factor=spec.sort_factor,
+            )
         if spec.strategy_type == "MLModelStrategy":
             if not spec.model_version:
                 raise ValueError(
@@ -1261,9 +1272,14 @@ class BacktestRunner:
                 top_n_per_sector=spec.top_n_per_sector,
             )
         if spec.strategy_type == "Combo":
+            if depth >= 3:
+                raise ValueError(
+                    "combo nesting exceeds depth limit 3 "
+                    f"(at strategy {spec.strategy_id!r})"
+                )
             from cquant.backtest_vector.strategies.combo import CompositeStrategy
             sub_strategies = [
-                self._build_strategy_from_config(cfg, idx)
+                self._build_strategy_from_config(cfg, idx, depth=depth)
                 for idx, cfg in enumerate(spec.sub_strategy_configs)
             ]
             return CompositeStrategy(
@@ -1297,16 +1313,31 @@ class BacktestRunner:
                 strategy_id=spec.strategy_id,
                 config=cfg,
             )
-        return StaticTopNStrategy(
-            strategy_id=spec.strategy_id,
-            top_n=spec.top_n,
-            sort_factor=spec.sort_factor,
-        )
+        raise ValueError(f"unknown strategy_type: {spec.strategy_type!r}")
 
-    def _build_strategy_from_config(self, cfg: dict, idx: int) -> Strategy:
-        """Build a sub-strategy from a config dict (used by Combo)."""
-        stype = cfg.get("strategy_type", "StaticTopN")
+    def _build_strategy_from_config(
+        self, cfg: dict, idx: int, depth: int = 0
+    ) -> Strategy:
+        """Build a sub-strategy from a config dict (used by Combo).
+
+        depth = depth of the *parent* Combo (top-level Combo passes 0).
+        Passthrough: fields provided in the child config override the
+        strategy defaults; absent/None keeps defaults (None does not
+        override — e.g. factor_weights=None keeps the legacy
+        {sort_factor: 1.0} MultiFactor fallback).
+        """
+        stype = cfg.get("strategy_type")
+        if not stype:
+            raise ValueError(
+                f"sub_strategy_configs[{idx}]: 'strategy_type' is required "
+                "(silent StaticTopN fallback was removed)"
+            )
         sid = f"{cfg.get('strategy_id', 'sub')}_{idx}"
+        dsl_spec = cfg.get("dsl_spec") or {}
+        if stype == "DSL" and isinstance(dsl_spec, dict) and dsl_spec.get("regime"):
+            logger.warning(
+                "子策略 %s 的 regime 段被忽略——regime 是组合级语义", sid
+            )
         sub_spec = BacktestRunSpec(
             dataset_version="",
             strategy_id=sid,
@@ -1324,8 +1355,17 @@ class BacktestRunner:
             entry_conditions=cfg.get("entry_conditions", []),
             exit_conditions=cfg.get("exit_conditions", []),
             indicator_specs=cfg.get("indicator_specs", []),
+            # ── A2 passthrough (only when provided in child config) ──
+            factor_weights=cfg.get("factor_weights"),
+            missing_factor_strategy=cfg.get("missing_factor_strategy", "fill_0"),
+            penalty_per_missing=cfg.get("penalty_per_missing", 0.5),
+            dsl_spec=dsl_spec,
+            breakout_config=cfg.get("breakout_config", {}),
+            custom_weights=cfg.get("custom_weights", {}),
+            sub_strategy_configs=cfg.get("sub_strategy_configs", []),
+            combo_method=cfg.get("combo_method", "equal_weight"),
         )
-        return self._build_strategy(sub_spec)
+        return self._build_strategy(sub_spec, depth=depth + 1)
 
     def _detect_cost_model(self, prices: pl.DataFrame) -> CostModel:
         """Detect cost model based on asset_id exchange prefix."""

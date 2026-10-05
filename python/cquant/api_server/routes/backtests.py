@@ -312,6 +312,34 @@ def _validate_factor_weights(
     return factor_weights
 
 
+def _validate_sub_strategy_configs(
+    configs: list[dict], depth: int = 0
+) -> None:
+    """Eagerly validate Combo sub_strategy_configs (A2).
+
+    Mirrors engine-side rules so misconfigurations fail with 400 at request
+    time instead of asynchronously in the background job:
+    - every sub config must carry an explicit ``strategy_type`` (the silent
+      StaticTopN fallback was removed);
+    - nested Combo depth is capped at 3.
+    """
+    for idx, cfg in enumerate(configs):
+        if not isinstance(cfg, dict) or not cfg.get("strategy_type"):
+            raise ValueError(
+                f"sub_strategy_configs[{idx}]: 'strategy_type' is required "
+                "(silent StaticTopN fallback was removed)"
+            )
+        if cfg["strategy_type"] == "Combo":
+            if depth + 1 >= 3:
+                raise ValueError(
+                    f"combo nesting exceeds depth limit 3 "
+                    f"(at sub_strategy_configs[{idx}])"
+                )
+            _validate_sub_strategy_configs(
+                cfg.get("sub_strategy_configs") or [], depth=depth + 1
+            )
+
+
 def _load_metrics(path: pathlib.Path) -> dict:
     """Load metrics JSON from an artifacts file (blocking I/O, run via to_thread)."""
     with open(path) as f:
@@ -461,6 +489,12 @@ async def create_backtest(
     top_sectors = body.top_sectors if body.top_sectors != 3 else parsed.get("top_sectors", 3)
     top_n_per_sector = body.top_n_per_sector if body.top_n_per_sector != 3 else parsed.get("top_n_per_sector", 3)
     sub_strategy_configs = body.sub_strategy_configs or parsed.get("sub_strategy_configs", [])
+    # A2: eager Combo child validation — 400 instead of async job failure
+    if strategy_type == "Combo":
+        try:
+            _validate_sub_strategy_configs(sub_strategy_configs)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     combo_method = body.combo_method if body.combo_method != "equal_weight" else parsed.get("combo_method", "equal_weight")
     custom_weights = body.custom_weights or parsed.get("custom_weights", {}) or {}
     entry_conditions = body.entry_conditions or parsed.get("entry_conditions", [])

@@ -1127,7 +1127,10 @@
         "eval_valid": "Valid (validation set only)",
         "eval_all": "All (use all data)",
         "window_expanding": "Expanding",
-        "window_sliding": "Sliding"
+        "window_sliding": "Sliding",
+        "freq_daily": "Daily (1d)",
+        "freq_weekly": "Weekly (1w)",
+        "freq_monthly": "Monthly (1mo)"
       },
       "label_option": {
         "ret_1d": "ret_1d (1-day return)",

@@ -224,6 +224,8 @@ class BacktestRunSpec:
     combo_method: str = "equal_weight"
     # Universe filtering
     universe_id: str = "all"
+    # P0': rebalance frequency wired through to engine BacktestSpec
+    rebalance_frequency: str = "1d"  # '1d' | '1w' | '1mo'
     # Cross-sectional scoring integration
     scoring_run_id: str = ""
     # CustomWeightStrategy
@@ -488,6 +490,7 @@ class BacktestRunner:
             risk_policies=risk_policies,
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
+            rebalance_frequency=spec.rebalance_frequency,
             regime_sm=regime_sm,
             warmup_days=warmup,
         )
@@ -541,6 +544,7 @@ class BacktestRunner:
             risk_policies=spec.risk_policies,
             extra={"catalog": self._catalog},
             random_seed=spec.random_seed,
+            rebalance_frequency=spec.rebalance_frequency,
             regime_sm=regime_sm,
         )
 
@@ -871,6 +875,7 @@ class BacktestRunner:
         benchmark_asset_id: str = "",
         risk_policies=None,
         tags=None,
+        rebalance_frequency: str = "1d",
     ) -> str:
         """使用自定义策略运行回测并持久化结果。
 
@@ -916,6 +921,7 @@ class BacktestRunner:
             end_date=end_date,
             initial_cash=initial_cash,
             tags=tags or {},
+            rebalance_frequency=rebalance_frequency,
         )
 
         warmup = persist_spec.warmup_days or getattr(
@@ -938,6 +944,7 @@ class BacktestRunner:
             benchmark_asset_id=benchmark_asset_id,
             tags=tags or {},
             random_seed=persist_spec.random_seed,
+            rebalance_frequency=persist_spec.rebalance_frequency,
             # B1 装配：DSL 策略含 regime 段时挂载状态机（无 regime 保持 None）
             regime_sm=self._regime_sm_for_strategy(strategy),
             warmup_days=warmup,

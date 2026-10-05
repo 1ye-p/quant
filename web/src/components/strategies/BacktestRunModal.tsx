@@ -30,6 +30,9 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
   const [sortFactor, setSortFactor] = useState(factors[0])
   const [datasetVersion, setDatasetVersion] = useState('')
   const [universeId, setUniverseId] = useState(parsed.universe_id ?? 'all')
+  const [rebalanceFrequency, setRebalanceFrequency] = useState<'1d' | '1w' | '1mo'>(
+    (parsed as Record<string, unknown>).rebalance_frequency as '1d' | '1w' | '1mo' ?? '1d'
+  )
   const [customAssets, setCustomAssets] = useState('')
   // UI 预选沪深300（服务端不做静默默认，用户可显式切回"无基准"）
   const [benchmarkId, setBenchmarkId] = useState('SSE:000300')
@@ -238,6 +241,19 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
               />
             </div>
           )}
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">{t('component.backtest_run_modal.label.rebalance_frequency')}</label>
+            <select
+              className="input w-full"
+              value={rebalanceFrequency}
+              onChange={e => setRebalanceFrequency(e.target.value as typeof rebalanceFrequency)}
+              data-testid="rebalance-frequency-select"
+            >
+              <option value="1d">{t('component.backtest_run_modal.option.freq_daily')}</option>
+              <option value="1w">{t('component.backtest_run_modal.option.freq_weekly')}</option>
+              <option value="1mo">{t('component.backtest_run_modal.option.freq_monthly')}</option>
+            </select>
+          </div>
           <div>
             <label className="block text-sm text-gray-600 mb-1">{t('component.backtest_run_modal.label.benchmark')}</label>
             <select value={benchmarkId} onChange={e => setBenchmarkId(e.target.value)} className="input w-full">
@@ -528,6 +544,7 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
                   sort_factor: sortFactor,
                   strategy_type: parsed.strategy_type ?? 'StaticTopN',
                   universe_id: universeId === 'custom' ? 'all' : universeId,
+                  rebalance_frequency: rebalanceFrequency,
                   benchmark_asset_id: benchmarkId || "",
                   ...(scoringRunId ? { scoring_run_id: scoringRunId } : {}),
                 }

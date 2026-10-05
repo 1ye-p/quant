@@ -1101,6 +1101,8 @@
         "split_count": "分割数",
         "gap_days": "间隔天数",
         "window_type": "窗口类型"
+,
+        "rebalance_frequency": "再平衡频率"
       },
       "param": {
         "top_n": "Top N",
@@ -1127,7 +1129,10 @@
         "eval_valid": "Valid（仅在验证集回测）",
         "eval_all": "All（用全部数据回测）",
         "window_expanding": "Expanding（扩展窗口）",
-        "window_sliding": "Sliding（滑动窗口）"
+        "window_sliding": "Sliding（滑动窗口）",
+        "freq_daily": "每日（1d）",
+        "freq_weekly": "每周（1w）",
+        "freq_monthly": "每月（1mo）"
       },
       "label_option": {
         "ret_1d": "ret_1d（1日收益）",

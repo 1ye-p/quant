@@ -36,6 +36,48 @@ async function openAndRun() {
   await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1))
 }
 
+describe('BacktestRunModal rebalance frequency selector (P0\')', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedCreate.mockResolvedValue({
+      job_id: 'job_1',
+      strategy_id: 'strat_1',
+      status: 'running',
+    } as never)
+  })
+
+  it('renders the selector with three options and default 1d', async () => {
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText='{"factors":["ret_20d"],"top_n":10}' onClose={() => {}} />,
+    )
+    const select = await screen.findByTestId('rebalance-frequency-select') as HTMLSelectElement
+    expect(select.value).toBe('1d')
+    const options = Array.from(select.querySelectorAll('option')).map(o => o.value)
+    expect(options).toEqual(['1d', '1w', '1mo'])
+  })
+
+  it('sends rebalance_frequency: "1d" in the payload by default', async () => {
+    await openAndRun()
+    expect(mockedCreate).toHaveBeenCalledTimes(1)
+    const body = mockedCreate.mock.calls[0][0] as Record<string, unknown>
+    expect(body.rebalance_frequency).toBe('1d')
+  })
+
+  it('sends the selected weekly frequency in the payload', async () => {
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText='{"factors":["ret_20d"],"top_n":10}' onClose={() => {}} />,
+    )
+    const select = await screen.findByTestId('rebalance-frequency-select')
+    fireEvent.change(select, { target: { value: '1w' } })
+    const runBtn = await screen.findByRole('button', { name: '执行回测' })
+    await waitFor(() => expect((runBtn as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(runBtn)
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1))
+    const body = mockedCreate.mock.calls[0][0] as Record<string, unknown>
+    expect(body.rebalance_frequency).toBe('1w')
+  })
+})
+
 describe('BacktestRunModal precheck warnings (P3-7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

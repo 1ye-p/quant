@@ -12,6 +12,7 @@ import re
 import time
 import uuid
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -270,6 +271,8 @@ class BacktestCreateBody(BaseModel):
     dsl_spec: dict | None = None
     # BreakoutPullback params
     breakout_config: dict | None = None
+    # Rebalance frequency (P0'): '1d' | '1w' | '1mo' (first trading day of week/month)
+    rebalance_frequency: Literal["1d", "1w", "1mo"] = "1d"
 
 
 def _run_backtest(catalog, spec):
@@ -643,7 +646,7 @@ async def create_backtest(
         feature_set_version=feature_set_version,
         top_n=top_n,
         sort_factor=sort_factor,
-        tags=parsed.get("risk_limits", {}),
+        tags={**parsed.get("risk_limits", {}), "rebalance_frequency": body.rebalance_frequency},
         strategy_type=strategy_type,
         model_version=model_version,
         label_name=label_name,
@@ -667,6 +670,7 @@ async def create_backtest(
         breakout_config=body.breakout_config or parsed.get("breakout_config", {}),
         factor_weights=factor_weights,
         dsl_spec=dsl_spec or {},
+        rebalance_frequency=body.rebalance_frequency,
     )
 
     _ensure_schema_extensions(catalog)
@@ -3198,6 +3202,7 @@ async def run_sensitivity_analysis(
                 top_n=tags.get("top_n", 10),
                 sort_factor=tags.get("sort_factor", "ret_20d"),
                 tags=tags,
+                rebalance_frequency=tags.get("rebalance_frequency", "1d"),
             )
 
             # Build the BacktestSpec using the runner
@@ -3689,6 +3694,7 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 top_n=int(tags.get("top_n", 10)),
                 sort_factor=tags.get("sort_factor", "ret_20d"),
                 tags=tags,
+                rebalance_frequency=tags.get("rebalance_frequency", "1d"),
                 strategy_type="DSL" if dsl_spec is not None else "StaticTopN",
                 dsl_spec=dsl_spec or {},
             )

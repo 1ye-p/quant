@@ -448,12 +448,148 @@ async def get_ic_analytics(job_id: str, catalog: CatalogDep) -> dict:
     return df.to_dicts()[0]
 
 
+def _evaluate_ic_metrics(merged: pl.DataFrame, ret_name: str) -> tuple[list[dict], dict]:
+    """IC/衰减/分组/换手 — 全部委托 FactorEvaluator（A3-2 单一实现）。
+
+    路由侧仅保留收敛前口径的数据适配与组装：
+    - 门槛过滤：IC/衰减 截面 >= 5、分组收益截面 >= 10（evaluator 默认 3/5）
+    - Rank IC decay 逐 lag 逐日 IC 取均值（evaluator.rank_ic_decay 为 pooled
+      口径，聚合语义不同——路由在侧组装，不改 evaluator 公共语义）
+    - Top20% turnover（A3-1 分母=当日截面）、round 位数、净 IC 公式
+      ``mean_ic − 0.003 × factor_turnover``
+    """
+    import numpy as np
+    import polars as pl
+    from cquant.factorlab.evaluation import FactorEvaluator
+
+    # ── 路由门槛（保持收敛前口径；evaluator 默认 3/5）────────────
+    cs = merged.group_by("trade_date").len()
+    dates_ic = cs.filter(pl.col("len") >= 5)["trade_date"]
+    dates_q = cs.filter(pl.col("len") >= 10)["trade_date"]
+
+    merged_ic = merged.filter(pl.col("trade_date").is_in(dates_ic.to_list()))
+    factors_ic = merged_ic.select(["trade_date", "asset_id", "value"])
+    returns_ic = merged_ic.select(["trade_date", "asset_id", ret_name])
+
+    ev = FactorEvaluator(factor_col="value", return_col=ret_name, method="rank")
+
+    ic_df = ev.ic_series(factors_ic, returns_ic)
+
+    def _as_date(d):
+        # polars group_by 键在某些版本为 list/tuple (date,)
+        return d[0] if isinstance(d, (tuple, list)) else d
+
+    series = [
+        {"trade_date": str(_as_date(d)), "ic": round(float(v), 6)}
+        for d, v in zip(
+            ic_df["trade_date"].to_list(), ic_df["ic"].to_list()
+        )
+    ]
+    ic_values = [s["ic"] for s in series]
+    summary = {
+        "mean_ic": round(float(np.mean(ic_values)), 6) if ic_values else 0.0,
+        "ir": round(float(np.mean(ic_values) / (np.std(ic_values) + 1e-12)), 4) if ic_values else 0.0,
+        "hit_rate": round(float(sum(1 for v in ic_values if v > 0) / max(len(ic_values), 1)), 4),
+        "observations": len(ic_values),
+    }
+
+    # ── Rank IC decay（lag 1-10，逐 lag 逐日 IC 均值——路由侧组装）──
+    # lag 按全期日期序列索引（收敛前口径：截面<5 的日期留在索引里、
+    # 其前后配对因 pair 截面<5 被剔除，而非被跳过重排）。
+    sorted_dates = sorted(merged["trade_date"].unique().to_list())
+    rank_ic_decay: list[dict] = []
+    for lag in range(1, 11):
+        vals: list[float] = []
+        if lag < len(sorted_dates):
+            date_shift = {
+                d: sorted_dates[i + lag]
+                for i, d in enumerate(sorted_dates)
+                if i + lag < len(sorted_dates)
+            }
+            if date_shift:
+                shifted = factors_ic.with_columns(
+                    # default=None：无 t+lag 对应日的行置 null 后丢弃
+                    # （否则原日期行残留，与平移行混入同一截面）
+                    pl.col("trade_date").replace_strict(date_shift, default=None)
+                ).drop_nulls("trade_date")
+                # pair 截面 >=5 门槛（收敛前口径；evaluator 默认 3）
+                pair_ok = (
+                    shifted.join(returns_ic, on=["asset_id", "trade_date"], how="inner")
+                    .group_by("trade_date")
+                    .len()
+                    .filter(pl.col("len") >= 5)["trade_date"]
+                )
+                shifted = shifted.filter(pl.col("trade_date").is_in(pair_ok.to_list()))
+                if shifted.height:
+                    vals = ev.ic_series(shifted, returns_ic)["ic"].to_list()
+        rank_ic_decay.append({
+            "lag": lag,
+            "ic": round(float(np.mean(vals)), 6) if vals else 0.0,
+        })
+
+    # ── Quantile returns（5 分组，截面>=10 门槛）──────────────────
+    merged_q = merged.filter(pl.col("trade_date").is_in(dates_q.to_list()))
+    q_df = ev.quantile_returns(
+        merged_q.select(["trade_date", "asset_id", "value"]),
+        merged_q.select(["trade_date", "asset_id", ret_name]),
+        n_quantiles=5,
+    )
+    quantile_returns = [
+        {"quantile": int(q), "mean_return": round(float(m), 6)}
+        for q, m in zip(q_df["quantile"].to_list(), q_df["mean_return"].to_list())
+    ]
+
+    # ── Factor turnover（Top 20%，A3-1 分母=当日截面）─────────────
+    factor_turnover = round(
+        float(
+            ev.factor_turnover(
+                merged.select(["trade_date", "asset_id", "value"]), top_pct=0.2
+            )
+        ),
+        4,
+    )
+
+    summary["rank_ic_decay"] = rank_ic_decay
+    summary["quantile_returns"] = quantile_returns
+    summary["factor_turnover"] = factor_turnover
+
+    # ── 净 IC（线性换手惩罚，公式不变）────────────────────────────
+    net_cost_rate = 0.003
+    summary["net_ic"] = round(
+        float(summary["mean_ic"]) - net_cost_rate * factor_turnover, 6
+    )
+
+    # ── IC 显著性检验（Newey-West HAC）+ 半衰期 ──────────────────
+    try:
+        ic_arr = np.asarray(ic_values, dtype=float)
+        ttest = ev.ic_ttest(ic_arr)
+        summary["ic_ttest"] = {
+            "t_stat": round(float(ttest["t_stat"]), 4) if np.isfinite(ttest["t_stat"]) else None,
+            "p_value": round(float(ttest["p_value"]), 4) if np.isfinite(ttest["p_value"]) else None,
+            "ci_lower": round(float(ttest["ci_lower"]), 6) if np.isfinite(ttest["ci_lower"]) else None,
+            "ci_upper": round(float(ttest["ci_upper"]), 6) if np.isfinite(ttest["ci_upper"]) else None,
+            "n": int(ttest["n"]),
+            "significant": bool(
+                ttest["n"] >= 30
+                and np.isfinite(ttest["p_value"])
+                and ttest["p_value"] < 0.05
+            ),
+        }
+        decay_ics_arr = np.asarray(
+            [d["ic"] for d in rank_ic_decay], dtype=float
+        )
+        hl = ev.half_life(decay_ics_arr)
+        summary["ic_half_life"] = round(float(hl), 2) if hl is not None else None
+    except Exception:
+        logger.debug("IC t-test / half-life computation skipped", exc_info=True)
+
+    return series, summary
+
+
 def _compute_ic(job_id: str, body: ICComputeBody, catalog: CatalogDep) -> None:
     """Background task: compute IC series for a factor."""
     import polars as pl
     import json
-    import numpy as np
-    from collections import defaultdict
 
     try:
         catalog.execute(
@@ -522,125 +658,11 @@ def _compute_ic(job_id: str, body: ICComputeBody, catalog: CatalogDep) -> None:
             how="inner",
         ).drop_nulls()
 
-        # Compute daily IC = cross-sectional rank correlation
-        series = []
-        for dt, group in merged.group_by("trade_date"):
-            if group.height < 5:
-                continue
-            f_rank = group["value"].rank().to_numpy()
-            r_rank = group[ret_name].rank().to_numpy()
-            ic = float(np.corrcoef(f_rank, r_rank)[0, 1]) if len(f_rank) > 1 else 0.0
-            series.append({"trade_date": str(dt[0]), "ic": round(ic, 6)})
-
-        series.sort(key=lambda x: x["trade_date"])
-        ic_values = [s["ic"] for s in series]
-        summary = {
-            "mean_ic": round(float(np.mean(ic_values)), 6) if ic_values else 0.0,
-            "ir": round(float(np.mean(ic_values) / (np.std(ic_values) + 1e-12)), 4) if ic_values else 0.0,
-            "hit_rate": round(float(sum(1 for v in ic_values if v > 0) / max(len(ic_values), 1)), 4),
-            "observations": len(ic_values),
-        }
-
-        # ── Rank IC decay（lag 1-10）──────────────────────────────
-        sorted_dates = sorted(merged["trade_date"].unique().to_list())
-        date_map: dict = {dt[0]: grp for dt, grp in merged.group_by("trade_date")}
-        rank_ic_decay = []
-        for lag in range(1, 11):
-            decay_ics = []
-            for i in range(len(sorted_dates) - lag):
-                date_t = sorted_dates[i]
-                date_tlag = sorted_dates[i + lag]
-                factor_t = date_map[date_t].select(["asset_id", "value"])
-                ret_tlag = date_map.get(date_tlag, pl.DataFrame()).select(["asset_id", ret_name])
-                joined = factor_t.join(ret_tlag, on="asset_id", how="inner")
-                if joined.height < 5:
-                    continue
-                f_arr = joined["value"].rank().to_numpy()
-                r_arr = joined[ret_name].rank().to_numpy()
-                ic_val = float(np.corrcoef(f_arr, r_arr)[0, 1])
-                if not np.isnan(ic_val):
-                    decay_ics.append(ic_val)
-            rank_ic_decay.append({
-                "lag": lag,
-                "ic": round(float(np.mean(decay_ics)), 6) if decay_ics else 0.0,
-            })
-
-        # ── Quantile returns（5 分组）────────────────────────────
-        q_buckets: dict[int, list[float]] = defaultdict(list)
-        for dt in sorted_dates:
-            group = date_map[dt]
-            if group.height < 10:
-                continue
-            sorted_g = group.sort("value")
-            n = len(sorted_g)
-            q_size = n // 5
-            for q in range(5):
-                start_idx = q * q_size
-                end_idx = (q + 1) * q_size if q < 4 else n
-                sliced = sorted_g.slice(start_idx, end_idx - start_idx)
-                _m = sliced[ret_name].mean()
-                mean_ret = float(_m) if _m is not None else 0.0
-                q_buckets[q + 1].append(mean_ret)
-        quantile_returns = [
-            {"quantile": q, "mean_return": round(float(np.mean(vals)), 6)}
-            for q, vals in sorted(q_buckets.items())
-        ]
-
-        # ── Factor turnover（Top 20%）────────────────────────────
-        top_n_assets = max(1, int(0.2 * merged["asset_id"].n_unique()))
-        turnovers: list[float] = []
-        prev_top: set[str] = set()
-        for dt in sorted_dates:
-            today_top = set(
-                date_map[dt]
-                .sort("value", descending=True)
-                .head(top_n_assets)["asset_id"]
-                .to_list()
-            )
-            if prev_top:
-                overlap = len(today_top & prev_top)
-                turnovers.append(1.0 - overlap / max(len(today_top), 1))
-            prev_top = today_top
-        factor_turnover = round(float(np.mean(turnovers)), 4) if turnovers else 0.0
-
-        # 追加到 summary
-        summary["rank_ic_decay"] = rank_ic_decay
-        summary["quantile_returns"] = quantile_returns
-        summary["factor_turnover"] = factor_turnover
-
-        # ── 净 IC（线性换手惩罚）─────────────────────────────────
-        # net_ic = mean_ic - cost_rate × factor_turnover
-        # 惩罚高换手因子的交易成本拖累。默认 30bps 单边费率。
-        net_cost_rate = 0.003
-        summary["net_ic"] = round(
-            float(summary["mean_ic"]) - net_cost_rate * factor_turnover, 6
-        )
-
-        # ── IC 显著性检验（Newey-West HAC）+ 半衰期 ──────────────
-        try:
-            from cquant.factorlab.evaluation import FactorEvaluator
-
-            ic_arr = np.asarray(ic_values, dtype=float)
-            ttest = FactorEvaluator.ic_ttest(ic_arr)
-            summary["ic_ttest"] = {
-                "t_stat": round(float(ttest["t_stat"]), 4) if np.isfinite(ttest["t_stat"]) else None,
-                "p_value": round(float(ttest["p_value"]), 4) if np.isfinite(ttest["p_value"]) else None,
-                "ci_lower": round(float(ttest["ci_lower"]), 6) if np.isfinite(ttest["ci_lower"]) else None,
-                "ci_upper": round(float(ttest["ci_upper"]), 6) if np.isfinite(ttest["ci_upper"]) else None,
-                "n": int(ttest["n"]),
-                "significant": bool(
-                    ttest["n"] >= 30
-                    and np.isfinite(ttest["p_value"])
-                    and ttest["p_value"] < 0.05
-                ),
-            }
-            decay_ics_arr = np.asarray(
-                [d["ic"] for d in rank_ic_decay], dtype=float
-            )
-            hl = FactorEvaluator.half_life(decay_ics_arr)
-            summary["ic_half_life"] = round(float(hl), 2) if hl is not None else None
-        except Exception:
-            logger.debug("IC t-test / half-life computation skipped", exc_info=True)
+        # ── A3-2：IC 全口径委托 FactorEvaluator（单一实现）────────
+        # 路由只保留参数适配 + 汇总落表 + 响应组装（口径详见
+        # _evaluate_ic_metrics docstring；一致性基线见
+        # python/tests/unit/test_ic_route_consistency.py）
+        series, summary = _evaluate_ic_metrics(merged, ret_name)
 
         catalog.execute(
             "UPDATE meta_factor_analytics SET status = 'done', series_json = ?, summary_json = ?, completed_at = ? WHERE job_id = ?",

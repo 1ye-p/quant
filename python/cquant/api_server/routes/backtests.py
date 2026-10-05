@@ -1329,6 +1329,90 @@ async def get_backtest_signals(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+@router.get("/{run_id}/positions-series")
+async def get_backtest_positions_series(
+    run_id: str,
+    catalog: CatalogDep,
+    metric: str = Query(default="weight", pattern="^(weight|industry)$"),
+    top_n: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    """Get point-in-time positions as a date-ordered series for charting (B4b).
+
+    双 metric 形态（trade_date 升序）：
+    - ``weight``   → ``{series: [{trade_date, positions:
+      [{asset_id, weight, industry}]}]}``；每日按权重取 Top ``top_n``，其余
+      合并为 ``asset_id: "__other__"``（weight = 余量和，industry = None）。
+      industry 经 silver_assets 左连接；无映射 → None。
+    - ``industry`` → ``{series: [{trade_date, weights: {industry: sum}}]}``
+      按行业求和的堆叠序列；空 industry / 无映射统一归 ``'未知'``
+      （后端归一，前端 i18n 展示）。
+
+    .. note::
+        真实库 silver_assets.industry 抽查（B4b-0, 2026-10-05）：非空率
+        100%（6977/6977），但取值是上市板块（Main/BSE/ChiNext/STAR）而非
+        真实行业分类——industry 形态当前只能按板块粒度展示。
+
+    404 判定顺序（body 为 ``{"reason": ...}``）：
+    - ``run_not_found``    — gold_backtest_runs 无此 run
+    - ``no_position_data`` — run 存在但 gold_positions 无行（旧 run）
+    """
+    run_df = catalog.query(
+        "SELECT run_id FROM gold_backtest_runs WHERE run_id = ?", [run_id]
+    )
+    if run_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "run_not_found"})
+
+    pos_df = catalog.query(
+        "SELECT p.trade_date AS trade_date, p.asset_id AS asset_id, "
+        "       p.weight AS weight, a.industry AS industry "
+        "FROM gold_positions p "
+        "LEFT JOIN silver_assets a ON p.asset_id = a.asset_id "
+        "WHERE p.run_id = ? ORDER BY p.trade_date ASC, p.weight DESC",
+        [run_id],
+    )
+    if pos_df.is_empty():
+        return JSONResponse(status_code=404, content={"reason": "no_position_data"})
+
+    # Group rows by trade_date (query already sorts by date asc, weight desc)
+    by_date: dict[str, list[dict]] = {}
+    for row in pos_df.iter_rows(named=True):
+        date_key = str(row["trade_date"])
+        by_date.setdefault(date_key, []).append(row)
+
+    series: list[dict] = []
+    if metric == "weight":
+        for date_key, rows in by_date.items():
+            positions = [
+                {
+                    "asset_id": row["asset_id"],
+                    "weight": (
+                        float(row["weight"]) if row["weight"] is not None else None
+                    ),
+                    "industry": row["industry"],
+                }
+                for row in rows[:top_n]
+            ]
+            rest = rows[top_n:]
+            if rest:
+                other_weight = sum(
+                    float(r["weight"]) for r in rest if r["weight"] is not None
+                )
+                positions.append(
+                    {"asset_id": "__other__", "weight": other_weight, "industry": None}
+                )
+            series.append({"trade_date": date_key, "positions": positions})
+    else:  # industry
+        for date_key, rows in by_date.items():
+            weights: dict[str, float] = {}
+            for row in rows:
+                industry = row["industry"] or "未知"
+                w = float(row["weight"]) if row["weight"] is not None else 0.0
+                weights[industry] = weights.get(industry, 0.0) + w
+            series.append({"trade_date": date_key, "weights": weights})
+
+    return {"run_id": run_id, "metric": metric, "top_n": top_n, "series": series}
+
+
 @router.get("/{run_id}/risk")
 async def get_backtest_risk(run_id: str, catalog: CatalogDep, limit: int = 20) -> dict:
     """Get risk snapshots for a backtest run."""

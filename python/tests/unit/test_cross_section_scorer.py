@@ -391,3 +391,194 @@ class TestScoreIntegration:
 
             assert len(result) == 3
             # Without neutralization, scores should be z-scored factor values
+
+
+# ─── fill_null 枚举（A3：统一 missing 处理）────────────────────────────────
+
+
+def _fill_null_factor_data() -> pl.DataFrame:
+    """4 assets × 3 factors，asset B 的 f2 缺失（唯一 null）。"""
+    return pl.DataFrame(
+        {
+            "trade_date": ["2024-01-01"] * 4,
+            "asset_id": ["A", "B", "C", "D"],
+            "f1": [1.0, 2.0, 3.0, 4.0],
+            "f2": [1.0, None, 3.0, 4.0],
+            "f3": [4.0, 3.0, 2.0, 1.0],
+        }
+    ).with_columns(pl.col("trade_date").cast(pl.Date))
+
+
+def _z(values: list[float]) -> np.ndarray:
+    """Null-skipping population used by both scorer and multi_factor (ddof=1)."""
+    arr = np.asarray([v for v in values if v is not None], dtype=float)
+    return (arr - arr.mean()) / arr.std(ddof=1)
+
+
+class TestFillNullModes:
+    """ScoringConfig.fill_null 四选项行为。"""
+
+    def _score(self, mock_catalog, data: pl.DataFrame, **config_kwargs):
+        scorer = CrossSectionScorer(mock_catalog)
+        config = ScoringConfig(
+            name="test_fill_null",
+            factors=[
+                FactorWeight(factor_name="f1"),
+                FactorWeight(factor_name="f2"),
+                FactorWeight(factor_name="f3"),
+            ],
+            neutralize=[],
+            winsorize=(0.0, 1.0),  # no-op clipping
+            **config_kwargs,
+        )
+        with patch.object(scorer, "_load_factors", return_value=data):
+            return scorer.score(config, "v1", "2024-01-01", "2024-01-01")
+
+    def test_fill_modes_produce_no_null_scores(self, mock_catalog):
+        """median/mean/zero 回归：填充后所有资产都有有限合成分。"""
+        for mode in ("median", "mean", "zero"):
+            result = self._score(mock_catalog, _fill_null_factor_data(), fill_null=mode)
+            assert len(result) == 4, mode
+            assert result["score"].null_count() == 0, mode
+
+    def test_fill_median_hand_calc(self, mock_catalog):
+        """median：B 的 f2 用截面中位数 3.0 填充后参与 z-score。"""
+        result = self._score(mock_catalog, _fill_null_factor_data(), fill_null="median")
+        scores = dict(zip(result["asset_id"].to_list(), result["score"].to_list()))
+
+        z1 = _z([1.0, 2.0, 3.0, 4.0])
+        z2_filled = _z([1.0, 3.0, 3.0, 4.0])  # B filled with median 3.0
+        z3 = _z([4.0, 3.0, 2.0, 1.0])
+        expected_b = z1[1] + z2_filled[1] + z3[1]
+        assert scores["B"] == pytest.approx(expected_b, abs=1e-9)
+
+    def test_risk_penalty_hand_calc(self, mock_catalog):
+        """risk_penalty：合成分 = Σ(可用因子 z 分) − 缺失数 × penalty（手算对齐）。"""
+        result = self._score(
+            mock_catalog,
+            _fill_null_factor_data(),
+            fill_null="risk_penalty",
+            penalty_per_missing=0.5,
+        )
+        scores = dict(zip(result["asset_id"].to_list(), result["score"].to_list()))
+
+        z1 = _z([1.0, 2.0, 3.0, 4.0])
+        z2 = _z([1.0, 3.0, 4.0])  # null-skipping: B 不参与统计
+        z3 = _z([4.0, 3.0, 2.0, 1.0])
+
+        # B：f2 缺失 → 不填充、不计入合成分，扣 1 × 0.5
+        expected_b = z1[1] + z3[1] - 1 * 0.5
+        assert scores["B"] == pytest.approx(expected_b, abs=1e-9)
+
+        # A：无缺失 → 无扣减；z2 对 A 的取值 = (1 - mean([1,3,4]))/std
+        z2_a = (1.0 - np.mean([1.0, 3.0, 4.0])) / np.std([1.0, 3.0, 4.0], ddof=1)
+        expected_a = z1[0] + z2_a + z3[0]
+        assert scores["A"] == pytest.approx(expected_a, abs=1e-9)
+
+    def test_risk_penalty_missing_column_not_counted(self, mock_catalog):
+        """配置了但数据中整列缺失的因子：不计 per-row 惩罚（对齐 multi_factor 语义）。"""
+        data = _fill_null_factor_data().drop("f3")
+        result = self._score(
+            mock_catalog, data, fill_null="risk_penalty", penalty_per_missing=1.0
+        )
+        assert len(result) == 4
+        # f3 整列缺失不计惩罚；A 无 null → 合成分 = z1(A) + z2(A)，无扣减
+        scores = dict(zip(result["asset_id"].to_list(), result["score"].to_list()))
+        z1 = _z([1.0, 2.0, 3.0, 4.0])
+        z2_a = (1.0 - np.mean([1.0, 3.0, 4.0])) / np.std([1.0, 3.0, 4.0], ddof=1)
+        assert scores["A"] == pytest.approx(z1[0] + z2_a, abs=1e-9)
+
+    def test_risk_penalty_with_neutralization_keeps_penalty(self, mock_catalog):
+        """risk_penalty + 中性化：numpy 残差（null→NaN）还原为 null，扣罚不丢。"""
+        from datetime import date as _date
+
+        data = _fill_null_factor_data()
+        scorer = CrossSectionScorer(mock_catalog)
+        mktcap = pl.DataFrame(
+            {
+                "asset_id": ["A", "B", "C", "D"],
+                "trade_date": [_date(2024, 1, 1)] * 4,
+                "ln_mktcap": [20.0, 21.0, 22.0, 23.0],
+            }
+        )
+
+        def _run(penalty: float) -> pl.DataFrame:
+            config = ScoringConfig(
+                name=f"test_rp_neutral_{penalty}",
+                factors=[FactorWeight(factor_name="f1"), FactorWeight(factor_name="f2")],
+                neutralize=["market_cap"],
+                winsorize=(0.0, 1.0),
+                fill_null="risk_penalty",
+                penalty_per_missing=penalty,
+            )
+            with patch.object(scorer, "_load_factors", return_value=data):
+                with patch.object(
+                    scorer, "_load_neutralization_data", return_value=mktcap
+                ):
+                    return scorer.score(config, "v1", "2024-01-01", "2024-01-01")
+
+        with_pen = _run(0.5)
+        without_pen = _run(0.0)
+
+        assert with_pen["score"].null_count() == 0
+        scored = dict(zip(with_pen["asset_id"].to_list(), with_pen["score"].to_list()))
+        nopen = dict(
+            zip(without_pen["asset_id"].to_list(), without_pen["score"].to_list())
+        )
+        # B（缺 f2）：扣罚 1 × 0.5；A（无缺失）：不受影响
+        assert (nopen["B"] - scored["B"]) == pytest.approx(0.5, abs=1e-9)
+        assert nopen["A"] == pytest.approx(scored["A"], abs=1e-12)
+
+
+class TestCrossModuleRiskPenaltyConsistency:
+    """A3 核心用例：scorer 与 MultiFactorStrategy 的 risk_penalty 打分一致。"""
+
+    def test_same_cross_section_same_ranking(self, mock_catalog):
+        """同截面、同权重：两实现合成分逐资产一致（容差 1e-9）且排序一致。"""
+        from datetime import date
+
+        from cquant.backtest_vector.strategies.multi_factor import MultiFactorStrategy
+        from cquant.backtest_vector.strategy import StrategyContext
+
+        features = _fill_null_factor_data()
+        factor_weights = {"f1": 1.0, "f2": 1.0, "f3": 1.0}
+
+        # scorer 侧（winsorize 关闭、无中性化 → 与 multi_factor 数学口径对齐）
+        scorer = CrossSectionScorer(mock_catalog)
+        config = ScoringConfig(
+            name="consistency",
+            factors=[FactorWeight(factor_name=n, weight=w) for n, w in factor_weights.items()],
+            neutralize=[],
+            winsorize=(0.0, 1.0),
+            fill_null="risk_penalty",
+            penalty_per_missing=0.5,
+        )
+        with patch.object(scorer, "_load_factors", return_value=features):
+            scored = scorer.score(config, "v1", "2024-01-01", "2024-01-01")
+
+        # multi_factor 侧
+        strat = MultiFactorStrategy(
+            "mf_consistency",
+            factor_weights=factor_weights,
+            top_n=4,
+            missing_factor_strategy="risk_penalty",
+            penalty_per_missing=0.5,
+        )
+        ctx = StrategyContext(
+            as_of_date=date(2024, 1, 1), universe_id="u", features=features
+        )
+        signals = strat.generate_signals(ctx)
+
+        scorer_scores = dict(zip(scored["asset_id"].to_list(), scored["score"].to_list()))
+        mf_scores = dict(zip(signals["asset_id"].to_list(), signals["strength"].to_list()))
+
+        assert set(scorer_scores) == set(mf_scores)
+        for asset in scorer_scores:
+            assert scorer_scores[asset] == pytest.approx(
+                mf_scores[asset], abs=1e-9
+            ), f"score divergence at {asset}"
+
+        # 排序一致
+        scorer_order = scored.sort("rank")["asset_id"].to_list()
+        mf_order = signals["asset_id"].to_list()
+        assert scorer_order == mf_order

@@ -23,12 +23,25 @@ class FactorWeight:
 
 @dataclass
 class ScoringConfig:
-    """截面打分配置。"""
+    """截面打分配置。
+
+    fill_null 枚举（4 选项，A3 与回测策略侧统一）：
+      - "median" / "mean" / "zero"：按截面统计量/常数填充缺失值后参与打分
+      - "risk_penalty"：不填充；合成分按 缺失因子数 × penalty_per_missing 扣减
+        （公式与 ``backtest_vector/strategies/multi_factor.py`` 的
+        ``missing_factor_strategy="risk_penalty"`` 同语义：null 不填充、
+        按可用列计数 null、扣分作用于合成分）
+
+    注意："exclude" 仅回测策略侧（multi_factor）支持——scorer 无持仓概念，
+    不在本枚举内。两模块枚举文档互见：multi_factor.MissingFactorStrategy
+    的 "fill_0"/"fill_median" 对应本枚举的 "zero"/"median"。
+    """
     name: str
     factors: list[FactorWeight]
     neutralize: list[str] = field(default_factory=list)
     winsorize: tuple[float, float] = (0.01, 0.99)
-    fill_null: Literal["median", "mean", "zero"] = "median"
+    fill_null: Literal["median", "mean", "zero", "risk_penalty"] = "median"
+    penalty_per_missing: float = 0.5
 
 
 class CrossSectionScorer:
@@ -55,7 +68,21 @@ class CrossSectionScorer:
 
         scored = self._normalize_cross_section(factors_df, config)
         scored = self._neutralize_factors(scored, config, start_date, end_date)
-        scored = self._weighted_sum(scored, config.factors)
+        if config.fill_null == "risk_penalty":
+            # 中性化走 numpy 残差（null→NaN 往返），扣罚按 null 计数——
+            # 此处还原为 null 以保持 risk_penalty 语义（z 分支已 fill_nan(0)，
+            # 还原后的 NaN 只可能来自原始缺失）
+            factor_cols = [
+                fw.factor_name for fw in config.factors if fw.factor_name in scored.columns
+            ]
+            if factor_cols:
+                scored = scored.with_columns(
+                    [
+                        pl.when(~pl.col(c).is_nan()).then(pl.col(c)).otherwise(None).alias(c)
+                        for c in factor_cols
+                    ]
+                )
+        scored = self._weighted_sum(scored, config.factors, config)
         scored = scored.with_columns(
             pl.col("score").over("trade_date").rank(descending=True).alias("rank")
         )
@@ -111,15 +138,21 @@ class CrossSectionScorer:
             for col in factor_cols:
                 mean_val = pl.col(col).mean().over("trade_date")
                 df = df.with_columns(pl.col(col).fill_null(mean_val))
+        elif config.fill_null == "risk_penalty":
+            # 与 multi_factor 的 risk_penalty 同语义：null 不填充，
+            # 留给 _weighted_sum 按缺失数扣罚（winsorize/zscore 均跳过 null）
+            pass
         else:
             df = df.with_columns([pl.col(c).fill_null(0.0) for c in factor_cols])
 
         for col in factor_cols:
             mean_val = pl.col(col).mean().over("trade_date")
             std_val = pl.col(col).std().over("trade_date")
-            df = df.with_columns(
-                ((pl.col(col) - mean_val) / std_val).alias(col)
-            )
+            z_expr = (pl.col(col) - mean_val) / std_val
+            if config.fill_null == "risk_penalty":
+                # 对齐 multi_factor：std=0 的常数列 z 分为 NaN→0（null 保持 null）
+                z_expr = z_expr.fill_nan(0.0)
+            df = df.with_columns(z_expr.alias(col))
 
         return df
 
@@ -328,8 +361,37 @@ class CrossSectionScorer:
 
         return result
 
-    def _weighted_sum(self, df: pl.DataFrame, factors: list[FactorWeight]) -> pl.DataFrame:
-        """加权求和得到综合得分。"""
+    def _weighted_sum(
+        self,
+        df: pl.DataFrame,
+        factors: list[FactorWeight],
+        config: ScoringConfig | None = None,
+    ) -> pl.DataFrame:
+        """加权求和得到综合得分。
+
+        当 ``config.fill_null == "risk_penalty"`` 时按 multi_factor 同语义合成：
+        null 分项计 0（sum_horizontal 忽略 null），再按可用因子列的 null 数
+        × ``penalty_per_missing`` 扣减合成分——扣分作用于合成分，不填充原值。
+        """
+        if config is not None and config.fill_null == "risk_penalty":
+            available = [fw for fw in factors if fw.factor_name in df.columns]
+            if not available:
+                return df.with_columns(pl.lit(0.0).alias("score"))
+            composite = pl.sum_horizontal(
+                [
+                    pl.col(fw.factor_name)
+                    * fw.weight
+                    * (-1.0 if fw.direction == "short" else 1.0)
+                    for fw in available
+                ]
+            )
+            null_count = pl.sum_horizontal(
+                [pl.col(fw.factor_name).is_null().cast(pl.Int32) for fw in available]
+            )
+            return df.with_columns(
+                (composite - null_count * config.penalty_per_missing).alias("score")
+            )
+
         expr = None
         for fw in factors:
             if fw.factor_name not in df.columns:

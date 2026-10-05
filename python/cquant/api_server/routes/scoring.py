@@ -9,6 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
+from typing import Literal
 
 from cquant.api_server.deps import CatalogDep, run_job_async
 
@@ -56,6 +57,14 @@ def _ensure_scoring_tables(catalog) -> None:
 
 
 class ScoringConfigBody(BaseModel):
+    """POST /scoring/run 请求体。
+
+    fill_null 枚举与 ScoringConfig 对齐（4 选项，A3）：
+    median / mean / zero / risk_penalty。"exclude" 仅回测策略侧
+    （multi_factor 的 missing_factor_strategy）支持，此处 422。
+    penalty_per_missing 仅在 fill_null="risk_penalty" 时生效（默认 0.5）。
+    """
+
     name: str
     factors: list[dict]  # [{factor_name, weight, direction}]
     feature_set_version: str
@@ -63,7 +72,8 @@ class ScoringConfigBody(BaseModel):
     end_date: str
     neutralize: list[str] = []
     winsorize: list[float] = [0.01, 0.99]
-    fill_null: str = "median"
+    fill_null: Literal["median", "mean", "zero", "risk_penalty"] = "median"
+    penalty_per_missing: float = 0.5
 
 
 def _get_catalog():
@@ -98,6 +108,7 @@ def _run_scoring_task(run_id: str, body: ScoringConfigBody, catalog):
             neutralize=body.neutralize,
             winsorize=tuple(body.winsorize),
             fill_null=body.fill_null,
+            penalty_per_missing=body.penalty_per_missing,
         )
 
         scorer = CrossSectionScorer(catalog)

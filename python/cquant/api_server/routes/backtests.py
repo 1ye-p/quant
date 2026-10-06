@@ -194,6 +194,15 @@ def _job_ts(value) -> str:
     return s
 
 
+def _terminal_reason_set(job_id: str) -> bool:
+    """True when the registry already decided a terminal outcome (timeout /
+    cancel). Completion writes must not clobber that state (review M5)."""
+    from cquant.api_server.deps import JOB_REGISTRY
+
+    handle = JOB_REGISTRY.get(job_id)
+    return handle is not None and handle.terminal_reason is not None
+
+
 def _load_job(catalog, job_id: str) -> dict | None:
     """Load a job record from DuckDB. Returns None if not found."""
     try:
@@ -697,7 +706,8 @@ async def create_backtest(
         try:
             run_id = _run_backtest(catalog, spec)
             set_job_stage(job_id, "persisting")
-            _save_job(catalog, job_id, "backtest", "completed", run_id=run_id)
+            if not _terminal_reason_set(job_id):
+                _save_job(catalog, job_id, "backtest", "completed", run_id=run_id)
             # Auto-trigger overfitting analysis after successful backtest
             try:
                 set_job_stage(job_id, "analyzing")

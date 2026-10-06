@@ -79,6 +79,7 @@ const STAGE_I18N_KEYS: Record<string, string> = {
   persisting: 'common.stage_persisting',
   analyzing: 'common.stage_analyzing',
   grid_search: 'common.stage_grid_search',
+  running: 'common.stage_running',
 }
 
 

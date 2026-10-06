@@ -157,6 +157,12 @@ class JobHandle:
 
 #: job_id -> JobHandle (guarded by ``_registry_lock``).
 JOB_REGISTRY: dict[str, JobHandle] = {}
+#: job_ids cancelled BEFORE registration (cancel endpoint fires while the
+#: BackgroundTask hasn't started run_job_async yet). register_job consumes
+#: the entry and pre-arms the cancel event — otherwise the job would run to
+#: completion with a fresh clear event and overwrite DB status 'cancelled'
+#: with its own 'completed' (T7 review I3).
+_PENDING_CANCELS: set[str] = set()
 _registry_lock = threading.Lock()
 
 
@@ -178,6 +184,12 @@ def register_job(job_id: str, job_type: str = "job") -> JobHandle:
     )
     with _registry_lock:
         JOB_REGISTRY[job_id] = handle
+        if job_id in _PENDING_CANCELS:
+            # Cancelled before this registration — honour it immediately so
+            # the first engine/fill checkpoint raises instead of a full run.
+            _PENDING_CANCELS.discard(job_id)
+            handle.terminal_reason = "cancelled"
+            handle.cancel_event.set()
     return handle
 
 
@@ -198,14 +210,22 @@ def activate_job(job_id: str) -> None:
 def unregister_job(job_id: str) -> None:
     with _registry_lock:
         JOB_REGISTRY.pop(job_id, None)
+        # Never-registered stale cancels must not accumulate forever.
+        _PENDING_CANCELS.discard(job_id)
 
 
 def request_job_cancel(job_id: str) -> bool:
-    """Cooperatively request cancellation. Returns True if the job is registered."""
+    """Cooperatively request cancellation. Returns True if the job is registered.
+
+    A cancel for an unregistered job_id is remembered in ``_PENDING_CANCELS``
+    (the job body may not have started yet) — register_job will pre-arm the
+    event when it eventually registers.
+    """
     with _registry_lock:
         handle = JOB_REGISTRY.get(job_id)
-    if handle is None:
-        return False
+        if handle is None:
+            _PENDING_CANCELS.add(job_id)
+            return False
     handle.terminal_reason = handle.terminal_reason or "cancelled"
     handle.cancel_event.set()
     return True
@@ -367,12 +387,15 @@ async def run_job_async(
             reason = handle.terminal_reason
         else:
             reason = exc.reason
-        if reason != "timeout" or handle is None:
-            _persist_job_record(
-                catalog, job_id or "?", job_type,
-                "failed" if reason == "timeout" else "cancelled",
-                error=str(exc),
-            )
+        # Persist unconditionally for user cancels; for timeouts the watcher
+        # already persisted failed(timeout), but if its persist threw (swallowed
+        # at debug level) this upsert is the fallback — otherwise the record
+        # stays 'running' forever with no registry entry (review M8).
+        _persist_job_record(
+            catalog, job_id or "?", job_type,
+            "failed" if reason == "timeout" else "cancelled",
+            error=str(exc),
+        )
         logging.getLogger(__name__).info("job_cancelled: %s (%s)", job_id, reason)
         return None
     except BaseException:

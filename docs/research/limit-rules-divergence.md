@@ -104,3 +104,13 @@ prev_close 与 td 的复权 close 同基，比值不受除权影响——**看�
 
 每一步：先重录 perf_equiv fixture（语义变更=新基线），再改实现，
 等价测试同步更新——与本次 P1 的"等价门"流程相同，只是基线换新。
+## 周频调仓跨整周假期漏切（2026-10-05 perf 批 P0' 评审 I2）
+
+`_is_rebalance_date`（engine.py）用 `weekday(cur) < weekday(prev)` 推导"每周
+首交易日"。跨国庆整周停市（Tue 09-30 → Wed 10-08）时 `2 < 1` 为 False，新一周
+的首个交易日**不会**成为调仓日，该周被静默跳过。此为既有引擎语义，P0' 把
+`rebalance_frequency` 首次暴露给终端用户后成为可见行为。
+
+- 已由 `python/tests/unit/test_rebalance_frequency_gaps.py` 以 `xfail(strict)`
+  钉住（正常周边界仍断言通过）
+- 修复方向：交易日历感知的"本周首个交易日"推导，归入语义修正批

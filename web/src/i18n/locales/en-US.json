@@ -22,6 +22,8 @@
     "running": "Running...",
     "elapsed_seconds": "elapsed {{s}}s",
     "stage_queued": "Queued (waiting for a slot)",
+
+     "stage_running": "Running",
     "stage_loading": "Loading data",
     "stage_signals": "Generating signals",
     "stage_fills": "Simulating fills",
@@ -1189,7 +1191,7 @@
         "legacy_mid_1d": "~5-15min",
         "legacy_mid_1w": "~1-3min",
         "legacy_mid_1mo": "~1min",
-        "legacy_full_1d": "several minutes",
+        "legacy_full_1d": "hours",
         "legacy_full_1w": "~2-5min",
         "legacy_full_1mo": "~1-2min"
       },

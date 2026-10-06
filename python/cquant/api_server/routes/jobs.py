@@ -37,6 +37,20 @@ def _find_job(catalog, job_id: str) -> tuple[str, str, str] | None:
     return None
 
 
+#: Job types whose bodies contain cooperative-cancel checkpoints (engine /
+#: fill day loops, sensitivity sweep, validation suite backtests). Types NOT
+#: here (ic, ic_matrix, ml, pipeline, scoring, report, ingest) run to natural
+#: completion; cancel only flips their DB status.
+_CHECKPOINTABLE_JOB_TYPES = {"backtest", "sensitivity", "validation_suite"}
+
+
+def _job_type(job_id: str) -> str | None:
+    from cquant.api_server.deps import JOB_REGISTRY
+
+    handle = JOB_REGISTRY.get(job_id)
+    return handle.job_type if handle is not None else None
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str, catalog: CatalogDep) -> dict:
     """Cancel a running or pending job."""
@@ -57,10 +71,12 @@ async def cancel_job(job_id: str, catalog: CatalogDep) -> dict:
     )
     # P5: also fire the cooperative cancel event so the job's engine/fill
     # day-loop checkpoints raise JobCancelledError and the worker thread
-    # exits at the next loop boundary (best-effort: jobs whose type has no
-    # checkpoints — e.g. ML training — finish naturally and keep this
-    # DB-level 'cancelled' status).
-    cooperative = request_job_cancel(job_id)
+    # exits at the next loop boundary. `cooperative` is only True for job
+    # types that actually run those checkpoints — ic / ic_matrix / ML /
+    # pipeline / scoring / report have no checkpoints: their threads finish
+    # naturally and keep this DB-level 'cancelled' status (T7 review I2:
+    # the field must not overpromise).
+    cooperative = request_job_cancel(job_id) and _job_type(job_id) in _CHECKPOINTABLE_JOB_TYPES
     return {"job_id": job_id, "status": "cancelled", "cooperative": cooperative}
 
 

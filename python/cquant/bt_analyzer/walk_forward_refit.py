@@ -232,6 +232,11 @@ class WalkForwardRefit:
                 start_date=train_start,
                 end_date=train_end,
                 warmup_days=warmup,
+                # P5: 取消信号必须跟进折内 spec——否则 WF 任务（最长的一类
+                # 任务）的取消/超时在折循环里全部失效，完成后还会把
+                # cancelled 状态覆写成 completed（T7 评审 I1）。
+                cancel_event=getattr(spec, "cancel_event", None),
+                stage_cb=getattr(spec, "stage_cb", None),
                 # B1: regime 状态机透传（实例由 refit_callback 按 fold 重建，
                 # 各 fold 从 initial 状态开始；无 regime 时为 None）
                 regime_sm=spec.regime_sm,
@@ -255,6 +260,8 @@ class WalkForwardRefit:
                 start_date=test_start,
                 end_date=test_end,
                 warmup_days=warmup,
+                cancel_event=getattr(spec, "cancel_event", None),
+                stage_cb=getattr(spec, "stage_cb", None),
                 # B1: 与 train_spec 同一 fold 实例（callback 已按 fold 重建）
                 regime_sm=spec.regime_sm,
                 initial_cash=spec.initial_cash,

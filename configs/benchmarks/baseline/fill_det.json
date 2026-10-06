@@ -1,5 +1,5 @@
 {
-  "description": "FillSimulator 专项基准（cProfile 分段计时，Phase 0 瓶颈确认）",
+  "description": "FillSimulator 专项基准（cProfile 分段计时）",
   "params": {
     "universe": 5000,
     "days": 500,
@@ -115,6 +115,5 @@
         "percall_tot_us": 75.943
       }
     }
-  },
-  "gating_decision": "DECISION: YAGNI TERMINATE (项目终止). _get_price 占 2.06% (<=30%)，simulate 总耗时 21.0s < 5min；FillSimulator 非主瓶颈，无需数组化优化。"
+  }
 }

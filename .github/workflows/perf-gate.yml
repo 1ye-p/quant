@@ -55,7 +55,7 @@ jobs:
       - name: Backtest benchmark (dims gate)
         shell: bash -el {0}
         env:
-          CQUANT_BENCH_THRESHOLD: 30
+          CQUANT_BENCH_THRESHOLD: ${{ vars.CQUANT_BENCH_THRESHOLD || '30' }}
         run: |
           python scripts/benchmark_backtest.py \
             --dims 1000x250 3000x250 \
@@ -65,7 +65,7 @@ jobs:
       - name: FillSimulator benchmark (wall gate)
         shell: bash -el {0}
         env:
-          CQUANT_BENCH_THRESHOLD: 30
+          CQUANT_BENCH_THRESHOLD: ${{ vars.CQUANT_BENCH_THRESHOLD || '30' }}
         run: |
           python scripts/benchmark_fill_simulator.py \
             --universe 5000 --days 500 --top-n 250 \

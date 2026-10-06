@@ -282,7 +282,7 @@ def run_production_capture(
                     tags={"perf_equiv": True},
                 ))
             finally:
-                VectorBacktestEngine._build_tradability_today = orig
+                VectorBacktestEngine._build_tradability_today = staticmethod(orig)
 
             fills = cat.query(
                 "SELECT trade_date, asset_id, side, qty, price, notional, "

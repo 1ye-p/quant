@@ -560,6 +560,13 @@ class VectorBacktestEngine:
         # regime_scale_history (desired vs actual, checklist #3)
         regime_desired: dict[date, float] = {}
 
+        # P3 incremental ctx slicing: prices is pre-sorted by trade_date once
+        # above (non-decreasing), so the rebalance-day context
+        # ``trade_date <= td`` (inclusive of td) can be expressed as a row
+        # range [0, right_idx) via search_sorted instead of a full-table
+        # filter per rebalance day. side="right" keeps <= semantics.
+        ctx_dates = prices.get_column("trade_date")
+
         for i, td in enumerate(trade_dates):
             prev_date = trade_dates[i - 1] if i > 0 else None
             is_rebalance = self._is_rebalance_date(td, prev_date, spec.rebalance_frequency)
@@ -572,8 +579,11 @@ class VectorBacktestEngine:
                 # Build tradability flags for today
                 trad_today = self._build_tradability_today(prices, td)
 
-                # Pre-filter suspended stocks from context prices
-                prices_for_ctx = prices.filter(pl.col("trade_date") <= td)
+                # Pre-filter suspended stocks from context prices.
+                # P3: row-range slice over the pre-sorted trade_date column —
+                # semantically identical to filter(trade_date <= td).
+                ctx_end = ctx_dates.search_sorted(td, side="right")
+                prices_for_ctx = prices.slice(0, ctx_end)
                 if "is_suspended" in prices.columns:
                     suspended_today = prices.filter(
                         (pl.col("trade_date") == td) & pl.col("is_suspended")

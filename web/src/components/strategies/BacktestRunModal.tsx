@@ -72,6 +72,7 @@ function universeTier(id: string): UniverseTier | null {
 
 // P5 staged progress: backend job stage → i18n label (raw key as fallback)
 const STAGE_I18N_KEYS: Record<string, string> = {
+  queued: 'common.stage_queued',
   loading: 'common.stage_loading',
   signals: 'common.stage_signals',
   fills: 'common.stage_fills',

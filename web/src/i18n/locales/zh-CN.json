@@ -21,6 +21,7 @@
     "end_date": "结束日期",
     "running": "运行中...",
     "elapsed_seconds": "已用时 {{s}} 秒",
+    "stage_queued": "排队中（等待执行槽位）",
     "stage_loading": "加载数据",
     "stage_signals": "生成信号",
     "stage_fills": "撮合成交",

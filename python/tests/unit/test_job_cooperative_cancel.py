@@ -254,3 +254,73 @@ async def test_semaphore_released_on_cancel(monkeypatch):
 
     await run_job_async(_next_job, job_id="job-cancel-2", catalog=catalog)
     assert ran.is_set()
+
+
+# ---------------------------------------------------------------------------
+# 5. queue-fair deadline (T7 review Finding 2+3)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_queue_wait_does_not_burn_deadline(monkeypatch):
+    """排队期不烧预算：deadline 从信号量获取后起算。
+
+    占满信号量（容量 1）→ 提交短 deadline(1s) job 排队 → 等待 1.5s（> deadline）
+    → 释放 → job 必须正常跑完而非首个检查点被杀；排队期 stage 为 queued。
+    """
+    monkeypatch.setenv("CQUANT_JOB_TIMEOUT_SEC", "1")
+    monkeypatch.setattr(deps, "JOB_SEMAPHORE", asyncio.Semaphore(1))
+    catalog = FakeCatalog()
+    release = threading.Event()
+    ran = threading.Event()
+
+    def _holder() -> None:
+        release.wait(10)
+
+    def _queued_body() -> None:
+        # 多个检查点：若 deadline 误从注册起算，此处首个检查点即抛出
+        for _ in range(10):
+            deps.check_job_cancel("job-queued-1")
+            time.sleep(0.02)
+        ran.set()
+
+    async def _submit_holder():
+        # holder 不接 catalog：它自身运行时长（~1.8s）超过全局 1s deadline，
+        # 属合法 failed(timeout)，不应混入 queued job 的持久化断言
+        await run_job_async(_holder, job_id="job-holder-1")
+
+    async def _submit_queued():
+        await run_job_async(
+            _queued_body, job_id="job-queued-1", job_type="backtest",
+            catalog=catalog,
+        )
+
+    holder_task = asyncio.create_task(_submit_holder())
+    await asyncio.sleep(0.3)  # holder 获取唯一的槽位
+    queued_task = asyncio.create_task(_submit_queued())
+    await asyncio.sleep(1.5)  # 排队时长 > 1s deadline
+
+    progress = get_job_progress("job-queued-1")
+    assert progress is not None
+    assert progress["stage"] == "queued"
+    assert progress["stage_history"] == ["queued"]
+
+    release.set()
+    await asyncio.wait_for(holder_task, timeout=10)
+    await asyncio.wait_for(queued_task, timeout=10)
+
+    assert ran.is_set()  # 正常跑完，未被超时杀
+    assert catalog.last_status() is None  # 无 failed(timeout) 持久化
+    assert get_job_progress("job-queued-1") is None
+
+
+@pytest.mark.asyncio
+async def test_stage_history_queued_then_running(monkeypatch):
+    """注册期 stage=queued；获取信号量后推进为 running。"""
+    monkeypatch.setenv("CQUANT_JOB_TIMEOUT_SEC", "60")
+    seen: list[str] = []
+
+    def _run() -> None:
+        seen.append(get_job_progress("job-stage-q1")["stage"])
+
+    await run_job_async(_run, job_id="job-stage-q1", catalog=FakeCatalog())
+    assert seen == ["running"]

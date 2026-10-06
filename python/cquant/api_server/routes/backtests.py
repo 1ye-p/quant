@@ -3578,6 +3578,8 @@ class _SuiteSensitivity(GridSearchSensitivity):
             # 改过 scale 的 regime 定义重建 → 状态机扫描的是变体强度；
             # 每次调用返回全新实例，变体间无 latch 泄漏。
             regime_sm=self._suite_runner._regime_sm_for_strategy(strategy),
+            # T7 review Finding 1：变体 spec 同样透传协作取消事件
+            cancel_event=self._base_spec.cancel_event,
         )
 
 
@@ -3612,8 +3614,12 @@ def _slice_fold_sharpes(result, n_folds: int) -> list[float]:
     ]
 
 
-def _execute_validation_suite(catalog, run_id: str) -> dict:
-    """执行套件各步（单步失败隔离），返回 {steps, psr, dsr, checklist}。"""
+def _execute_validation_suite(catalog, run_id: str, job_id: str | None = None) -> dict:
+    """执行套件各步（单步失败隔离），返回 {steps, psr, dsr, checklist}。
+
+    ``job_id`` 透传 cancel_event 到 suite 内部回测（T7 review Finding 1），
+    使取消/超时在敏感性重跑的引擎检查点即时生效。
+    """
     from cquant.bt_analyzer.run import (
         AnalysisRunner, AnalysisRunSpec, load_result,
     )
@@ -3733,6 +3739,8 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 rebalance_frequency=tags.get("rebalance_frequency", "1d"),
                 strategy_type="DSL" if dsl_spec is not None else "StaticTopN",
                 dsl_spec=dsl_spec or {},
+                # T7 review Finding 1：suite 内回测透传协作取消事件
+                cancel_event=get_job_cancel_event(job_id) if job_id else None,
             )
             prices = runner._load_prices(run_spec)
             if prices.is_empty():
@@ -3749,6 +3757,7 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 extra={"catalog": catalog},
                 # B1 装配：DSL regime 段 → 状态机（无 regime 保持 None）
                 regime_sm=runner._regime_sm_for_strategy(base_strategy),
+                cancel_event=run_spec.cancel_event,
             )
             analyzer = _SuiteSensitivity(
                 runner=runner, run_spec=run_spec, dsl_base=dsl_spec,
@@ -3772,6 +3781,8 @@ def _execute_validation_suite(catalog, run_id: str) -> dict:
                 "sensitivity_flat": sensitivity_flat,
                 "best_params": sens.best_params,
             })
+    except JobCancelledError:
+        raise  # T7：suite 内回测检查点取消 → 整个套件按已取消收尾（不吞成单步 failed）
     except Exception as exc:
         logger.exception("validation-suite sensitivity failed for %s", run_id)
         steps.append({"step": "sensitivity", "status": "failed",
@@ -3909,7 +3920,7 @@ async def run_validation_suite(
     def _run_suite() -> None:
         try:
             _ensure_validation_table(catalog)
-            outcome = _execute_validation_suite(catalog, run_id)
+            outcome = _execute_validation_suite(catalog, run_id, job_id=job_id)
             suite_id = str(uuid.uuid4())
             created = datetime.now(tz=timezone.utc).isoformat()
             catalog.execute(

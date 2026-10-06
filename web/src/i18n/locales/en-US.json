@@ -21,6 +21,7 @@
     "end_date": "End Date",
     "running": "Running...",
     "elapsed_seconds": "elapsed {{s}}s",
+    "stage_queued": "Queued (waiting for a slot)",
     "stage_loading": "Loading data",
     "stage_signals": "Generating signals",
     "stage_fills": "Simulating fills",

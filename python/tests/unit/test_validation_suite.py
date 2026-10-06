@@ -378,3 +378,36 @@ class TestGetValidationSuite:
         with pytest.raises(Exception) as exc_info:
             _get_suite(cat, run_id)
         assert exc_info.value.status_code == 404
+
+
+# ── 5. T7 review：suite 内回测透传 cancel_event ──────────────────────────────
+
+def test_preset_cancel_terminates_suite_at_internal_checkpoint(filled_run) -> None:
+    """预置取消事件 → suite 敏感性重跑在引擎首个检查点抛 JobCancelledError。
+
+    Finding 1 回归：job_id 透传到 suite 内部 BacktestRunSpec/BacktestSpec，
+    取消不再只停留在 DB 标记（内部回测必须即时终止）。
+    """
+    from cquant.api_server import deps as job_deps
+    from cquant.api_server.routes.backtests import _execute_validation_suite
+    from cquant.core.jobs import JobCancelledError
+
+    cat, run_id = filled_run
+    job_id = "suite-cancel-1"
+    job_deps.register_job(job_id, job_type="validation_suite")
+    try:
+        assert job_deps.request_job_cancel(job_id)
+        with pytest.raises(JobCancelledError):
+            _execute_validation_suite(cat, run_id, job_id=job_id)
+    finally:
+        job_deps.unregister_job(job_id)
+
+
+def test_suite_without_job_id_runs_uncancelled(filled_run) -> None:
+    """无 job_id（legacy 调用）→ cancel_event=None 直通，套件正常完成。"""
+    from cquant.api_server.routes.backtests import _execute_validation_suite
+
+    cat, run_id = filled_run
+    outcome = _execute_validation_suite(cat, run_id)
+    steps = {s["step"]: s for s in outcome["steps"]}
+    assert steps["sensitivity"]["status"] in {"completed", "skipped"}

@@ -16,6 +16,7 @@ import polars as pl
 
 from cquant.backtest_vector.engine import BacktestResult, BacktestSpec, VectorBacktestEngine
 from cquant.backtest_vector.metrics import BacktestMetrics
+from cquant.core.jobs import JobCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +277,9 @@ class GridSearchSensitivity:
                 row = {**params, **metrics, "primary_metric": metrics.get(self._primary_metric, 0.0)}
                 results.append(row)
 
+            except JobCancelledError:
+                # P5: 协作取消须终止整个 grid（上层按已取消收尾），不是单组合 NaN
+                raise
             except Exception as e:
                 logger.warning("Combination %d failed: %s", i + 1, e)
                 # Add failed result with NaN metrics

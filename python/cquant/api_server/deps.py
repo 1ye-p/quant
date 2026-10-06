@@ -31,6 +31,7 @@ __all__ = [
     "JOB_REGISTRY",
     "JobCancelledError",
     "JobHandle",
+    "activate_job",
     "check_job_cancel",
     "get_job_cancel_event",
     "get_job_progress",
@@ -160,20 +161,38 @@ _registry_lock = threading.Lock()
 
 
 def register_job(job_id: str, job_type: str = "job") -> JobHandle:
-    """Register a running job; (re)starts its deadline bookkeeping."""
+    """Register a queued job; deadline bookkeeping starts at :func:`activate_job`.
+
+    The job is registered *before* the semaphore acquire so cancels requested
+    while queued are honoured; its deadline, however, only starts ticking once
+    the job actually begins running (queue wait must not burn the budget).
+    """
     import time
 
     handle = JobHandle(
         job_id=job_id,
         job_type=job_type,
-        stage="running",
-        stage_history=["running"],
+        stage="queued",
+        stage_history=["queued"],
         started_ts=time.monotonic(),
-        deadline_ts=time.monotonic() + _job_timeout_sec(),
     )
     with _registry_lock:
         JOB_REGISTRY[job_id] = handle
     return handle
+
+
+def activate_job(job_id: str) -> None:
+    """Transition a queued job to running and (re)start its deadline clock."""
+    import time
+
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+        if handle is None or handle.stage == "running":
+            return
+        handle.stage = "running"
+        handle.stage_history.append("running")
+        handle.started_ts = time.monotonic()
+        handle.deadline_ts = handle.started_ts + _job_timeout_sec()
 
 
 def unregister_job(job_id: str) -> None:
@@ -294,7 +313,9 @@ async def run_job_async(
     Cooperative cancel (P5): when ``job_id`` is provided the job is registered
     in ``JOB_REGISTRY`` with a per-job cancel event (fetchable inside the job
     body via ``get_job_cancel_event`` / checked with ``check_job_cancel``) and
-    a deadline watcher (``CQUANT_JOB_TIMEOUT_SEC``, default 3600s). The watcher
+    a deadline watcher (``CQUANT_JOB_TIMEOUT_SEC``, default 3600s). The
+    deadline starts when the job leaves the queue (semaphore acquired) so
+    queue wait does not burn the budget. The watcher
     persists ``failed(timeout)`` at the deadline; a job that hits a checkpoint
     afterwards raises :class:`JobCancelledError`, which is swallowed here after
     persisting the terminal status — artifacts already written are kept
@@ -323,10 +344,14 @@ async def run_job_async(
     watcher: threading.Thread | None = None
     if job_id:
         handle = register_job(job_id, job_type=job_type)
-        watcher = _start_timeout_watcher(handle, catalog)
     try:
         async with JOB_SEMAPHORE:
             job_queue_stats.acquire()
+            if handle is not None:
+                # Deadline starts only now (queue wait doesn't burn budget);
+                # the watcher is started alongside so it never fires early.
+                activate_job(job_id)
+                watcher = _start_timeout_watcher(handle, catalog)
             try:
                 result = await asyncio.to_thread(_run_job, *args, **kwargs)
                 return result

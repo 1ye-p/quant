@@ -154,7 +154,9 @@ def _build_target_weights(
     测试逐资产循环 / _get_price 调用频率的旋钮。
     """
     trade_dates = sorted(prices["trade_date"].unique().to_list())
-    asset_ids = prices["asset_id"].unique(maintain_order=False).to_list()[:top_n]
+    # sorted → 确定性 top-n 选择（与 benchmark_backtest.py 同因：
+    # unique(maintain_order=False) 顺序逐次可变，基准不可复现）。
+    asset_ids = sorted(prices["asset_id"].unique().to_list())[:top_n]
     weight = 1.0 / top_n
 
     rows: list[dict] = []

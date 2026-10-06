@@ -223,7 +223,9 @@ def _build_target_weights(
     完整策略/catalog。
     """
     trade_dates = sorted(prices["trade_date"].unique().to_list())
-    asset_ids = prices["asset_id"].unique(maintain_order=False).to_list()[:top_n]
+    # sorted → 确定性 top-n 选择（unique(maintain_order=False) 的返回顺序
+    # 逐次可变，曾导致同参数两次运行 fills 645 vs 712——基准不可复现）。
+    asset_ids = sorted(prices["asset_id"].unique().to_list())[:top_n]
     weight = 1.0 / top_n
 
     rows: list[dict] = []

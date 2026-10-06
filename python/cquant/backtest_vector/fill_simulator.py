@@ -148,8 +148,12 @@ class AShareFillSimulator:
                 day_weights["target_weight"].to_list(),
             ))
 
-            # Calculate current NAV for weight-based sizing
+            # Calculate current NAV for weight-based sizing.
+            # NOTE (quirk, preserved): this is the *pre-sell* NAV — sell/buy
+            # sizing below uses the start-of-day portfolio value (recorded
+            # 2026-08-09 v2.0); do not "fix".
             nav = self._calculate_nav(cash, positions, td, price_lookup)
+            n_fills_before_day = len(fills)
 
             # Process sells first (to free up cash)
             for asset_id in list(positions.keys()):
@@ -196,8 +200,14 @@ class AShareFillSimulator:
                             positions[asset_id] = current_qty + fill["qty"]
                             buy_dates[asset_id] = td
 
-            # Daily snapshot
-            nav = self._calculate_nav(cash, positions, td, price_lookup)
+            # Daily snapshot.
+            # NAV dedupe: cash/positions are only mutated inside `if fill:`
+            # branches above, so on a no-fill day the state at this point is
+            # identical to the pre-sell NAV call — _calculate_nav is a pure
+            # function of (cash, positions, td, lookup), so reuse is
+            # bitwise-identical to recomputing. On any-fill days, recompute.
+            if len(fills) > n_fills_before_day:
+                nav = self._calculate_nav(cash, positions, td, price_lookup)
             snapshots.append({
                 "trade_date": td,
                 "cash": cash,
@@ -233,23 +243,28 @@ class AShareFillSimulator:
                 "adj_factor": float(row.get("adj_factor", 1.0) or 1.0),
             }
 
-        # Second pass: compute prev_close from actual previous day's close
-        # Group by asset_id, sort by date
+        # Second pass: compute prev_close from actual previous day's close.
+        # Per asset: sort its dates ONCE, then a single forward walk carrying
+        # the previous close — O(D log D) per asset instead of the former
+        # per-row sorted()+.index() O(D^2) rescan (93% of simulate cumtime at
+        # 5000x500, see artifacts/benchmarks/2026-10-05_pre_perf_fill.json).
+        # Semantics unchanged: prev_close = close of the previous *available*
+        # date for that asset; first day uses its own close.
         asset_dates: dict[str, list[date]] = {}
         for (td, aid) in raw:
             asset_dates.setdefault(aid, []).append(td)
 
-        lookup = {}
-        for (td, aid), data in raw.items():
-            dates = sorted(asset_dates[aid])
-            idx = dates.index(td)
-            if idx > 0:
-                prev_date = dates[idx - 1]
-                prev_data = raw.get((prev_date, aid), {})
-                prev_close = prev_data.get("close", 0.0)
-            else:
-                prev_close = data["close"]  # First day: use own close
-            lookup[(td, aid)] = {**data, "prev_close": prev_close}
+        lookup: dict[tuple[date, str], dict] = {}
+        for aid, dates in asset_dates.items():
+            dates.sort()
+            prev_close: float | None = None
+            for td in dates:
+                data = raw[(td, aid)]
+                lookup[(td, aid)] = {
+                    **data,
+                    "prev_close": data["close"] if prev_close is None else prev_close,
+                }
+                prev_close = data["close"]
         return lookup
 
     def _get_price(self, td: date, asset_id: str, lookup: dict, field: str = "close") -> float:

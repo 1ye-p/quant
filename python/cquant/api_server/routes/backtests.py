@@ -168,7 +168,11 @@ def _save_job(catalog, job_id: str, job_type: str, status: str,
             "(job_id, job_type, status, run_id, error, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (job_id) DO UPDATE SET "
-            "status = excluded.status, run_id = excluded.run_id, "
+            # COALESCE: terminal writes from run_job_async's handler carry no
+            # run_id — a bare excluded.run_id would NULL the job→run link
+            # the frontend uses to navigate from a cancelled job (review I1).
+            "status = excluded.status, "
+            "run_id = COALESCE(excluded.run_id, _api_jobs.run_id), "
             "error = excluded.error, created_at = _api_jobs.created_at, "
             "updated_at = excluded.updated_at",
             [job_id, job_type, status, run_id, error, now, now],
@@ -1200,7 +1204,8 @@ async def trigger_analysis(
                 backtest_run_id=run_id,
                 embargo_days=embargo_days,
             ))
-            _save_job(catalog, job_id, "analysis", "completed", run_id=report.analysis_run_id)
+            if not _terminal_reason_set(job_id):
+                _save_job(catalog, job_id, "analysis", "completed", run_id=report.analysis_run_id)
         except JobCancelledError:
             raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:
@@ -3315,7 +3320,8 @@ async def run_sensitivity_analysis(
             result_path = result_dir / f"{job_id}.json"
             result_path.write_text(json.dumps(result_data, indent=2, default=str))
 
-            _save_job(catalog, job_id, "sensitivity", "completed", run_id=run_id)
+            if not _terminal_reason_set(job_id):
+                _save_job(catalog, job_id, "sensitivity", "completed", run_id=run_id)
             logger.info("Sensitivity analysis completed for job %s", job_id)
 
         except JobCancelledError:
@@ -3944,7 +3950,8 @@ async def run_validation_suite(
                     created,
                 ],
             )
-            _save_job(catalog, job_id, "validation_suite", "completed", run_id=run_id)
+            if not _terminal_reason_set(job_id):
+                _save_job(catalog, job_id, "validation_suite", "completed", run_id=run_id)
         except JobCancelledError:
             raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:
@@ -4267,7 +4274,8 @@ async def generate_research_report(
             )
             if not _mirror_report_to_knowledge_base(kb, report_id, run_id, content_md):
                 logger.warning("Report %s persisted to DuckDB only (KB mirror failed)", report_id)
-            _save_job(catalog, job_id, "report", "completed", run_id=run_id)
+            if not _terminal_reason_set(job_id):
+                _save_job(catalog, job_id, "report", "completed", run_id=run_id)
         except JobCancelledError:
             raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:

@@ -162,6 +162,11 @@ JOB_REGISTRY: dict[str, JobHandle] = {}
 #: the entry and pre-arms the cancel event — otherwise the job would run to
 #: completion with a fresh clear event and overwrite DB status 'cancelled'
 #: with its own 'completed' (T7 review I3).
+#: Leak note (review M4): entries for job_ids that NEVER register (cancel of a
+#: stale 'running' row from a crashed process; cancel racing natural
+#: completion) are not reclaimed — uuid4 keys make collisions impossible and
+#: volume is user-driven, so this is a bounded slow leak by design. Cap or
+#: TTL it if cancel volume ever becomes unbounded.
 _PENDING_CANCELS: set[str] = set()
 _registry_lock = threading.Lock()
 

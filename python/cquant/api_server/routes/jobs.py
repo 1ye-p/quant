@@ -45,9 +45,10 @@ _CHECKPOINTABLE_JOB_TYPES = {"backtest", "sensitivity", "validation_suite"}
 
 
 def _job_type(job_id: str) -> str | None:
-    from cquant.api_server.deps import JOB_REGISTRY
+    from cquant.api_server.deps import JOB_REGISTRY, _registry_lock
 
-    handle = JOB_REGISTRY.get(job_id)
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
     return handle.job_type if handle is not None else None
 
 

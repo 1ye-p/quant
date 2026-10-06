@@ -400,6 +400,12 @@ class WalkForwardRefit:
         # Run each fold
         folds = []
         for i, (train_start, train_end, test_start, test_end) in enumerate(fold_boundaries):
+            # M3（评审）：折间检查点——上一折落库期间到达的取消不必再拖一整折
+            # 数据加载（全市场帧下可达分钟级）才在引擎日循环里触发。
+            ev = getattr(self._base_spec, "cancel_event", None)
+            if ev is not None and ev.is_set():
+                from cquant.core.jobs import JobCancelledError
+                raise JobCancelledError(reason="cancelled")
             logger.info(
                 "Running fold %d/%d: train=%s to %s, test=%s to %s",
                 i + 1, len(fold_boundaries),

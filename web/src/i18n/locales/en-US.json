@@ -23,7 +23,7 @@
     "elapsed_seconds": "elapsed {{s}}s",
     "stage_queued": "Queued (waiting for a slot)",
 
-     "stage_running": "Running",
+    "stage_running": "Running",
     "stage_loading": "Loading data",
     "stage_signals": "Generating signals",
     "stage_fills": "Simulating fills",

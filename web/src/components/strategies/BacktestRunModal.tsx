@@ -12,6 +12,64 @@ interface BacktestRunModalProps {
   onClose: () => void
 }
 
+// ---------- P4: 安全默认 + 档位耗时预估 ----------
+// 新用户安全默认：HS300 指数池 + 周频调仓（后端预设名见 UNIVERSE_PRESETS /
+// resolve_universe，idx_hs300 = 000300 指数成分股）。
+const SAFE_DEFAULT_UNIVERSE = 'idx_hs300'
+const SAFE_DEFAULT_FREQ: RebalanceFrequency = '1w'
+
+// 老用户记忆：记住用户在 RunModal 里显式改过的选择（localStorage）。
+const RUN_MODAL_DEFAULTS_KEY = 'cquant_run_modal_defaults'
+
+type RebalanceFrequency = '1d' | '1w' | '1mo'
+const VALID_FREQS: readonly RebalanceFrequency[] = ['1d', '1w', '1mo']
+
+interface StoredDefaults {
+  universe_id?: string
+  rebalance_frequency?: RebalanceFrequency
+}
+
+function readStoredDefaults(): StoredDefaults {
+  try {
+    const raw = localStorage.getItem(RUN_MODAL_DEFAULTS_KEY)
+    if (!raw) return {}
+    const v = JSON.parse(raw) as Record<string, unknown>
+    return {
+      universe_id: typeof v.universe_id === 'string' ? v.universe_id : undefined,
+      rebalance_frequency: VALID_FREQS.includes(v.rebalance_frequency as RebalanceFrequency)
+        ? v.rebalance_frequency as RebalanceFrequency
+        : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function persistDefault(field: keyof StoredDefaults, value: string): void {
+  try {
+    const cur = readStoredDefaults()
+    localStorage.setItem(RUN_MODAL_DEFAULTS_KEY, JSON.stringify({ ...cur, [field]: value }))
+  } catch {
+    /* localStorage 不可用时静默降级为无记忆 */
+  }
+}
+
+// universe 档位（与后端 UNIVERSE_PRESETS 对应）：
+//   index = HS300 指数池（安全默认，~300 只）
+//   mid   = 中证800 类预设（板块/其他指数池，~800-1600 只）
+//   full  = 全市场（~5000 只）
+type UniverseTier = 'index' | 'mid' | 'full'
+const TIER_KNOWN_MID = [
+  'sse', 'szse', 'cyb', 'kcb', 'bse',
+  'idx_sse', 'idx_szse', 'idx_zz500', 'idx_zz1000', 'idx_cyb', 'idx_kcb50',
+]
+
+function universeTier(id: string): UniverseTier | null {
+  if (id === SAFE_DEFAULT_UNIVERSE) return 'index'
+  if (id === 'all') return 'full'
+  return TIER_KNOWN_MID.includes(id) ? 'mid' : null
+}
+
 export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRunModalProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -29,9 +87,17 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
   const [topN, setTopN] = useState(String(defaultTopN))
   const [sortFactor, setSortFactor] = useState(factors[0])
   const [datasetVersion, setDatasetVersion] = useState('')
-  const [universeId, setUniverseId] = useState(parsed.universe_id ?? 'all')
-  const [rebalanceFrequency, setRebalanceFrequency] = useState<'1d' | '1w' | '1mo'>(
-    (parsed as Record<string, unknown>).rebalance_frequency as '1d' | '1w' | '1mo' ?? '1d'
+  // P4 默认优先级：策略自身配置 > 老用户 localStorage 记忆 > 安全默认（HS300+1w）
+  const storedDefaults = useMemo(readStoredDefaults, [])
+  const [universeId, setUniverseId] = useState(
+    (parsed as Record<string, unknown>).universe_id as string
+    ?? storedDefaults.universe_id
+    ?? SAFE_DEFAULT_UNIVERSE
+  )
+  const [rebalanceFrequency, setRebalanceFrequency] = useState<RebalanceFrequency>(
+    VALID_FREQS.includes((parsed as Record<string, unknown>).rebalance_frequency as RebalanceFrequency)
+      ? (parsed as Record<string, unknown>).rebalance_frequency as RebalanceFrequency
+      : storedDefaults.rebalance_frequency ?? SAFE_DEFAULT_FREQ
   )
   const [customAssets, setCustomAssets] = useState('')
   // UI 预选沪深300（服务端不做静默默认，用户可显式切回"无基准"）
@@ -217,9 +283,11 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
             <label className="block text-sm text-gray-600 mb-1">{t('component.strategies.params.stock_pool')}</label>
             <select
               className="input w-full"
+              data-testid="universe-select"
               value={universeId}
               onChange={e => {
                 setUniverseId(e.target.value)
+                persistDefault('universe_id', e.target.value)
                 if (e.target.value !== 'custom') setCustomAssets('')
               }}
             >
@@ -246,7 +314,10 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
             <select
               className="input w-full"
               value={rebalanceFrequency}
-              onChange={e => setRebalanceFrequency(e.target.value as typeof rebalanceFrequency)}
+              onChange={e => {
+                setRebalanceFrequency(e.target.value as RebalanceFrequency)
+                persistDefault('rebalance_frequency', e.target.value)
+              }}
               data-testid="rebalance-frequency-select"
             >
               <option value="1d">{t('component.backtest_run_modal.option.freq_daily')}</option>
@@ -254,6 +325,29 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
               <option value="1mo">{t('component.backtest_run_modal.option.freq_monthly')}</option>
             </select>
           </div>
+          {/* P4: 档位耗时预估（静态文案，非动态计算）。
+              数字来源（两套口径）：
+              - P1 后（本批基准）：e2e 全市场 5000 股 × 500 交易日 × 1d = 29.5s
+                （2026-10 性能批 T4 终验），频率线性除、universe 按股数线性近似换算各档。
+              - P1 前（历史口径）：全市场 × 1d ≈ 数分钟、指数池 × 1w ≈ 约 1 分钟级。 */}
+          {(() => {
+            const tier = universeTier(universeId)
+            if (!tier) return null
+            return (
+              <p className="text-xs text-gray-500" data-testid="time-estimate">
+                ⏱ {t('component.backtest_run_modal.estimate.label')}:{' '}
+                {t(`component.backtest_run_modal.estimate.${tier}_${rebalanceFrequency}`)}
+                {' · '}
+                {t('component.backtest_run_modal.estimate.legacy_label')}:{' '}
+                {t(`component.backtest_run_modal.estimate.legacy_${tier}_${rebalanceFrequency}`)}
+              </p>
+            )
+          })()}
+          {universeTier(universeId) === 'full' && rebalanceFrequency === '1d' && (
+            <p className="text-xs text-amber-600" data-testid="slow-combo-warning">
+              ⚠ {t('component.backtest_run_modal.warning.slow_combo')}
+            </p>
+          )}
           <div>
             <label className="block text-sm text-gray-600 mb-1">{t('component.backtest_run_modal.label.benchmark')}</label>
             <select value={benchmarkId} onChange={e => setBenchmarkId(e.target.value)} className="input w-full">

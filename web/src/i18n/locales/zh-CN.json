@@ -1100,8 +1100,7 @@
         "eval_mode": "评估模式",
         "split_count": "分割数",
         "gap_days": "间隔天数",
-        "window_type": "窗口类型"
-,
+        "window_type": "窗口类型",
         "rebalance_frequency": "再平衡频率"
       },
       "param": {
@@ -1163,6 +1162,31 @@
       },
       "unit": {
         "stocks_suffix": " 股"
+      },
+      "estimate": {
+        "label": "预计耗时",
+        "legacy_label": "优化前",
+        "index_1d": "约 5-10 秒",
+        "index_1w": "约 2-5 秒",
+        "index_1mo": "约 1-3 秒",
+        "mid_1d": "约 10-20 秒",
+        "mid_1w": "约 3-8 秒",
+        "mid_1mo": "约 2-5 秒",
+        "full_1d": "约 30 秒-1 分钟",
+        "full_1w": "约 10-20 秒",
+        "full_1mo": "约 5-10 秒",
+        "legacy_index_1d": "约 3-5 分钟",
+        "legacy_index_1w": "约 1 分钟",
+        "legacy_index_1mo": "约 30 秒",
+        "legacy_mid_1d": "约 5-15 分钟",
+        "legacy_mid_1w": "约 1-3 分钟",
+        "legacy_mid_1mo": "约 1 分钟",
+        "legacy_full_1d": "数分钟",
+        "legacy_full_1w": "约 2-5 分钟",
+        "legacy_full_1mo": "约 1-2 分钟"
+      },
+      "warning": {
+        "slow_combo": "最慢组合：全市场 × 日频调仓。建议新用户先试「沪深300 + 每周」组合，速度快得多。"
       }
     },
     "backtests": {

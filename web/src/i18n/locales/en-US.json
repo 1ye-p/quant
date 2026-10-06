@@ -1161,6 +1161,31 @@
       },
       "unit": {
         "stocks_suffix": " stocks"
+      },
+      "estimate": {
+        "label": "Estimated time",
+        "legacy_label": "Before optimization",
+        "index_1d": "~5-10s",
+        "index_1w": "~2-5s",
+        "index_1mo": "~1-3s",
+        "mid_1d": "~10-20s",
+        "mid_1w": "~3-8s",
+        "mid_1mo": "~2-5s",
+        "full_1d": "~30s-1min",
+        "full_1w": "~10-20s",
+        "full_1mo": "~5-10s",
+        "legacy_index_1d": "~3-5min",
+        "legacy_index_1w": "~1min",
+        "legacy_index_1mo": "~30s",
+        "legacy_mid_1d": "~5-15min",
+        "legacy_mid_1w": "~1-3min",
+        "legacy_mid_1mo": "~1min",
+        "legacy_full_1d": "several minutes",
+        "legacy_full_1w": "~2-5min",
+        "legacy_full_1mo": "~1-2min"
+      },
+      "warning": {
+        "slow_combo": "Slowest combo: full market × daily rebalance. New users are advised to try \"CSI 300 + weekly\" first — much faster."
       }
     },
     "backtests": {

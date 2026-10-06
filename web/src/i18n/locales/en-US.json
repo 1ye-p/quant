@@ -1108,7 +1108,8 @@
         "eval_mode": "Eval Mode",
         "split_count": "Splits",
         "gap_days": "Gap Days",
-        "window_type": "Window Type"
+        "window_type": "Window Type",
+        "rebalance_frequency": "Rebalance frequency"
       },
       "param": {
         "top_n": "Top N",

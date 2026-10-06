@@ -220,7 +220,9 @@ async def compute_ic_matrix(
         "VALUES (?, ?, ?, ?, 'pending', ?)",
         [job_id, "__matrix__:" + ",".join(body.factor_names), body.feature_set_version, body.horizon_days, now],
     )
-    background_tasks.add_task(run_job_async, _compute_ic_matrix, job_id, body, catalog)
+    # P5: job_id → 注册表覆盖（取消事件 + deadline watcher）。不传 catalog：
+    # 该 job 的状态表是 meta_factor_analytics，超时持久化不走 _api_jobs。
+    background_tasks.add_task(run_job_async, _compute_ic_matrix, job_id, body, catalog, job_id=job_id, job_type="ic_matrix")
     return {"job_id": job_id, "status": "submitted"}
 
 
@@ -446,7 +448,7 @@ async def compute_ic_analytics(
         "VALUES (?, ?, ?, ?, 'pending', ?)",
         [job_id, body.factor_name, body.feature_set_version, body.horizon_days, now],
     )
-    background_tasks.add_task(run_job_async, _compute_ic, job_id, body, catalog)
+    background_tasks.add_task(run_job_async, _compute_ic, job_id, body, catalog, job_id=job_id, job_type="ic")
     return {"job_id": job_id, "status": "submitted"}
 
 

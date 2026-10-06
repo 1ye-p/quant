@@ -151,6 +151,11 @@ export const BacktestJobStatusSchema = z.object({
   status: z.string(),
   run_id: z.string().nullable(),
   error: z.string().nullable(),
+  // P5 staged progress（status === 'running' 时后端附带）
+  stage: z.string().optional(),
+  elapsed_s: z.number().optional(),
+  cancel_requested: z.boolean().optional(),
+  stage_history: z.array(z.string()).optional(),
 })
 
 export type BacktestJobStatus = z.infer<typeof BacktestJobStatusSchema>

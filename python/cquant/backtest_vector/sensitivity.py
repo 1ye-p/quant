@@ -162,6 +162,10 @@ class GridSearchSensitivity:
             optimizer=self._base_spec.optimizer,
             extra=new_extra,
             random_seed=self._base_spec.random_seed,
+            # P5: cancel/stage propagate to every grid variant (cooperative
+            # checkpoint keeps working across the whole grid search).
+            cancel_event=self._base_spec.cancel_event,
+            stage_cb=self._base_spec.stage_cb,
             # regime_sm: fresh instance per variant via factory (variants run
             # sequentially — sharing one machine would leak latch state).
             regime_sm=(

@@ -18,6 +18,7 @@ from __future__ import annotations
 import bisect
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -33,6 +34,7 @@ from cquant.backtest_vector.limit_rules import get_limit_pct
 from cquant.backtest_vector.metrics import BacktestMetrics, compute_metrics
 from cquant.backtest_vector.strategy import Strategy, StrategyContext
 from cquant.core.enums import EngineType, OrderSide, RiskDecisionType
+from cquant.core.jobs import JobCancelledError
 from cquant.core.types import OrderIntent, RiskDecision, RiskSnapshot
 from cquant.riskguard.policies.forced_exit import ForcedExit, ForcedExitPolicy
 from cquant.riskguard.policies.stop_loss import TrailingStopLossPolicy
@@ -85,6 +87,32 @@ class BacktestSpec:
     # ONLY (e.g. WF fold backtests whose window is shorter than the strategy's
     # lookback). Rebalance calendar, fills and stats still start at start_date.
     warmup_days: int = 0
+    # P5 cooperative cancellation — day-loop checkpoint (raise
+    # JobCancelledError at the top of each trade date). ``None`` (default)
+    # is a zero-cost pass-through: existing behaviour is bit-identical.
+    cancel_event: "threading.Event | None" = None
+    # P5 staged progress — optional ``Callable[[str], None]`` receiving stage
+    # labels ("signals" / "fills") at the same checkpoints. None = no-op.
+    # Never passed into Strategy code (Strategy ABC untouched).
+    stage_cb: "object | None" = None
+
+
+def _check_cancel(spec: BacktestSpec) -> None:
+    """Cooperative checkpoint — raise if the job's cancel event is set."""
+    ev = spec.cancel_event
+    if ev is not None and ev.is_set():
+        raise JobCancelledError(reason="cancelled")
+
+
+def _emit_stage(spec: BacktestSpec, stage: str) -> None:
+    """Best-effort stage notification for job progress display."""
+    cb = spec.stage_cb
+    if cb is None:
+        return
+    try:
+        cb(stage)
+    except Exception:  # pragma: no cover — progress must never break a run
+        logger.debug("stage_cb(%s) failed", stage, exc_info=True)
 
 
 @dataclass
@@ -329,6 +357,11 @@ class VectorBacktestEngine:
 
         try:
             result = self._run_impl(spec, run_id, started_at)
+        except JobCancelledError:
+            # P5: cancellation must propagate (cooperative cancel semantics) —
+            # never swallowed into an error-result, otherwise the job thread
+            # would keep running to natural completion.
+            raise
         except Exception as exc:
             logger.exception("Backtest %s failed: %s", run_id, exc)
             empty_metrics = BacktestMetrics(
@@ -567,7 +600,13 @@ class VectorBacktestEngine:
         # filter per rebalance day. side="right" keeps <= semantics.
         ctx_dates = prices.get_column("trade_date")
 
+        # P5 staged progress: data is loaded, entering the signal/fill loop.
+        _emit_stage(spec, "signals")
+
         for i, td in enumerate(trade_dates):
+            # P5 cooperative-cancel checkpoint (day-loop granularity; None
+            # event is a pass-through with zero behavioural difference).
+            _check_cancel(spec)
             prev_date = trade_dates[i - 1] if i > 0 else None
             is_rebalance = self._is_rebalance_date(td, prev_date, spec.rebalance_frequency)
 
@@ -936,10 +975,14 @@ class VectorBacktestEngine:
             cost_model=spec.cost_model,
             max_volume_pct=max_volume_pct,
         )
+        # P5: stage transition + cancel event handed into the fill day loop
+        # (same two-purpose checkpoint pattern as the engine day loop).
+        _emit_stage(spec, "fills")
         fills_df, snapshots_df = fill_sim.simulate(
             target_weights=weights_df,
             prices=prices,
             initial_cash=spec.initial_cash,
+            cancel_event=spec.cancel_event,
         )
 
         # Regime transparency (checklist #3): desired_scale (regime decision,

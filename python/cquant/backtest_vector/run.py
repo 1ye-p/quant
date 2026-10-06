@@ -251,6 +251,11 @@ class BacktestRunSpec:
     # Local RNG seed — propagated to BacktestSpec.random_seed for reproducible,
     # concurrency-safe runs (no global seed pollution).
     random_seed: int | None = None
+    # P5 cooperative cancellation — propagated to BacktestSpec.cancel_event
+    # (day-loop checkpoints). ``None`` (default) = legacy bit-identical path.
+    cancel_event: "threading.Event | None" = None
+    # P5 staged progress — propagated to BacktestSpec.stage_cb.
+    stage_cb: object | None = None
 
 
 class StaticTopNStrategy(Strategy):
@@ -493,6 +498,8 @@ class BacktestRunner:
             rebalance_frequency=spec.rebalance_frequency,
             regime_sm=regime_sm,
             warmup_days=warmup,
+            cancel_event=spec.cancel_event,
+            stage_cb=spec.stage_cb,
         )
 
         result = self._engine.run(bt_spec)
@@ -546,6 +553,8 @@ class BacktestRunner:
             random_seed=spec.random_seed,
             rebalance_frequency=spec.rebalance_frequency,
             regime_sm=regime_sm,
+            cancel_event=spec.cancel_event,
+            stage_cb=spec.stage_cb,
         )
 
         # Build refit callback that re-trains ML models per fold
@@ -948,6 +957,8 @@ class BacktestRunner:
             # B1 装配：DSL 策略含 regime 段时挂载状态机（无 regime 保持 None）
             regime_sm=self._regime_sm_for_strategy(strategy),
             warmup_days=warmup,
+            cancel_event=persist_spec.cancel_event,
+            stage_cb=persist_spec.stage_cb,
         )
 
         result = self._engine.run(bt_spec)

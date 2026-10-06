@@ -15,6 +15,9 @@ import asyncio
 import hmac
 import logging
 import os
+import threading
+import time
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Annotated, Any, Callable
 
@@ -22,6 +25,20 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cquant.core.config import settings
+from cquant.core.jobs import JobCancelledError
+
+__all__ = [
+    "JOB_REGISTRY",
+    "JobCancelledError",
+    "JobHandle",
+    "check_job_cancel",
+    "get_job_cancel_event",
+    "get_job_progress",
+    "register_job",
+    "request_job_cancel",
+    "run_job_async",
+    "set_job_stage",
+]
 from cquant.datahub.catalog import Catalog
 from cquant.knowledge_base import KnowledgeBaseService
 
@@ -95,7 +112,172 @@ class JobQueueStats:
 job_queue_stats = JobQueueStats()
 
 
-async def run_job_async(_run_job: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+# ---------------------------------------------------------------------------
+# Cooperative-cancel job registry (P5)
+# ---------------------------------------------------------------------------
+#
+# Every job submitted through ``run_job_async`` *with a job_id* is registered
+# here: a per-job ``threading.Event`` (the cooperative cancel signal checked
+# at engine/fill day-loop checkpoints), a deadline (watcher thread), and a
+# ``stage`` field for frontend progress display. Jobs without a job_id keep
+# the legacy behaviour unchanged.
+
+
+def _job_timeout_sec() -> float:
+    """Per-call deadline from ``CQUANT_JOB_TIMEOUT_SEC`` (default 3600s)."""
+    try:
+        return max(1.0, float(os.getenv("CQUANT_JOB_TIMEOUT_SEC", "3600")))
+    except ValueError:
+        return 3600.0
+
+
+@dataclass
+class JobHandle:
+    """Registry entry for one cancellable job."""
+
+    job_id: str
+    job_type: str = "job"
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    stage: str = "queued"
+    stage_history: list[str] = field(default_factory=list)
+    started_ts: float = 0.0
+    deadline_ts: float = 0.0
+    terminal_reason: str | None = None  # "timeout" | "cancelled" once decided
+
+    def progress(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "elapsed_s": round(time.monotonic() - self.started_ts, 1),
+            "cancel_requested": self.cancel_event.is_set(),
+            "stage_history": list(self.stage_history),
+            "terminal_reason": self.terminal_reason,
+        }
+
+
+#: job_id -> JobHandle (guarded by ``_registry_lock``).
+JOB_REGISTRY: dict[str, JobHandle] = {}
+_registry_lock = threading.Lock()
+
+
+def register_job(job_id: str, job_type: str = "job") -> JobHandle:
+    """Register a running job; (re)starts its deadline bookkeeping."""
+    import time
+
+    handle = JobHandle(
+        job_id=job_id,
+        job_type=job_type,
+        stage="running",
+        stage_history=["running"],
+        started_ts=time.monotonic(),
+        deadline_ts=time.monotonic() + _job_timeout_sec(),
+    )
+    with _registry_lock:
+        JOB_REGISTRY[job_id] = handle
+    return handle
+
+
+def unregister_job(job_id: str) -> None:
+    with _registry_lock:
+        JOB_REGISTRY.pop(job_id, None)
+
+
+def request_job_cancel(job_id: str) -> bool:
+    """Cooperatively request cancellation. Returns True if the job is registered."""
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+    if handle is None:
+        return False
+    handle.terminal_reason = handle.terminal_reason or "cancelled"
+    handle.cancel_event.set()
+    return True
+
+
+def set_job_stage(job_id: str, stage: str) -> None:
+    """Advance a job's stage for frontend display; unknown job_id is a no-op."""
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+        if handle is None:
+            return
+        handle.stage = stage
+        handle.stage_history.append(stage)
+
+
+def get_job_progress(job_id: str) -> dict[str, Any] | None:
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+    return handle.progress() if handle is not None else None
+
+
+def get_job_cancel_event(job_id: str) -> threading.Event | None:
+    """Fetch the cooperative cancel event for a job (None if unregistered)."""
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+    return handle.cancel_event if handle is not None else None
+
+
+def check_job_cancel(job_id: str) -> None:
+    """Cooperative checkpoint: raise :class:`JobCancelledError` if cancelled.
+
+    Timeout cancels carry ``reason="timeout"`` so the job persists as
+    ``failed(timeout)``; user cancels as ``cancelled``.
+    """
+    with _registry_lock:
+        handle = JOB_REGISTRY.get(job_id)
+    if handle is not None and handle.cancel_event.is_set():
+        raise JobCancelledError(
+            reason=handle.terminal_reason or "cancelled", job_id=job_id
+        )
+
+
+def _persist_job_record(catalog, job_id: str, job_type: str, job_status: str,
+                        error: str | None = None, run_id: str | None = None) -> None:
+    """Best-effort persistence via the canonical ``_save_job`` upsert."""
+    if catalog is None:
+        return
+    try:
+        from cquant.api_server.routes.backtests import _save_job
+
+        _save_job(catalog, job_id, job_type, job_status, run_id=run_id, error=error)
+    except Exception as exc:  # pragma: no cover — persistence is best-effort
+        logging.getLogger(__name__).debug("_persist_job_record(%s): %s", job_id, exc)
+
+
+def _start_timeout_watcher(handle: JobHandle, catalog) -> threading.Thread:
+    """Daemon thread: fire the cancel event + persist failed(timeout) at deadline."""
+
+    def _watch() -> None:
+        import time
+
+        remaining = handle.deadline_ts - time.monotonic()
+        if remaining <= 0 or not handle.cancel_event.wait(remaining):
+            # Deadline hit (or already fired elsewhere) — mark and persist.
+            first_timeout = handle.terminal_reason is None
+            handle.terminal_reason = handle.terminal_reason or "timeout"
+            handle.cancel_event.set()
+            if first_timeout:
+                handle.stage = "timeout"
+                _persist_job_record(
+                    catalog, handle.job_id, handle.job_type, "failed",
+                    error=f"Timeout: exceeded {int(_job_timeout_sec())}s "
+                          f"(CQUANT_JOB_TIMEOUT_SEC)",
+                )
+
+    thread = threading.Thread(
+        target=_watch, name=f"job-watch-{handle.job_id}", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+async def run_job_async(
+    _run_job: Callable[..., Any],
+    /,
+    *args: Any,
+    job_id: str | None = None,
+    job_type: str | None = None,
+    catalog: Any = None,
+    **kwargs: Any,
+) -> Any:
     """Run a heavy (synchronous) job under the global semaphore.
 
     The job callable runs in a worker thread (``asyncio.to_thread``) so the
@@ -109,6 +291,15 @@ async def run_job_async(_run_job: Callable[..., Any], /, *args: Any, **kwargs: A
     log record. ``job_type`` is derived from the callable name (``_run_job``
     / ``_run_analysis`` / ``_run_sensitivity``) so dashboards stay readable.
 
+    Cooperative cancel (P5): when ``job_id`` is provided the job is registered
+    in ``JOB_REGISTRY`` with a per-job cancel event (fetchable inside the job
+    body via ``get_job_cancel_event`` / checked with ``check_job_cancel``) and
+    a deadline watcher (``CQUANT_JOB_TIMEOUT_SEC``, default 3600s). The watcher
+    persists ``failed(timeout)`` at the deadline; a job that hits a checkpoint
+    afterwards raises :class:`JobCancelledError`, which is swallowed here after
+    persisting the terminal status — artifacts already written are kept
+    (diagnostics first). Without ``job_id`` behaviour is unchanged.
+
     Parameters
     ----------
     _run_job:
@@ -116,13 +307,23 @@ async def run_job_async(_run_job: Callable[..., Any], /, *args: Any, **kwargs: A
         arguments can be forwarded without collision.
     *args, **kwargs:
         Forwarded verbatim to ``_run_job``.
+    job_id:
+        Optional registry key enabling cancel/timeout/stage tracking.
+    job_type:
+        Overrides the derived job-type label (used for persistence).
+    catalog:
+        Optional catalog used to persist the terminal job record on
+        cancel/timeout.
     """
-    import time
-
-    job_type = _derive_job_type(_run_job)
+    job_type = job_type or _derive_job_type(_run_job)
     job_queue_stats.reserve()
     start_ts = time.perf_counter()
     status = "success"
+    handle: JobHandle | None = None
+    watcher: threading.Thread | None = None
+    if job_id:
+        handle = register_job(job_id, job_type=job_type)
+        watcher = _start_timeout_watcher(handle, catalog)
     try:
         async with JOB_SEMAPHORE:
             job_queue_stats.acquire()
@@ -131,6 +332,24 @@ async def run_job_async(_run_job: Callable[..., Any], /, *args: Any, **kwargs: A
                 return result
             finally:
                 job_queue_stats.release()
+    except JobCancelledError as exc:
+        # Cooperative checkpoint fired. The watcher already persisted
+        # failed(timeout) on a deadline hit; for user cancels (or if the
+        # watcher could not persist) record the terminal status here.
+        status = "failure"
+        if handle is not None:
+            handle.terminal_reason = handle.terminal_reason or exc.reason
+            reason = handle.terminal_reason
+        else:
+            reason = exc.reason
+        if reason != "timeout" or handle is None:
+            _persist_job_record(
+                catalog, job_id or "?", job_type,
+                "failed" if reason == "timeout" else "cancelled",
+                error=str(exc),
+            )
+        logging.getLogger(__name__).info("job_cancelled: %s (%s)", job_id, reason)
+        return None
     except BaseException:
         status = "failure"
         # If reserve()/acquire() itself never happened (e.g. cancelled before
@@ -139,6 +358,15 @@ async def run_job_async(_run_job: Callable[..., Any], /, *args: Any, **kwargs: A
         # ensure waiting counter does not leak on cancellation.
         raise
     finally:
+        if handle is not None:
+            # Release the watcher (no-op if it already fired) and join it so
+            # no zombie threads outlive the job. Setting the event here is
+            # safe: the job body has finished, nothing checks the event after.
+            handle.cancel_event.set()
+        if watcher is not None:
+            watcher.join(timeout=5.0)
+        if handle is not None and job_id:
+            unregister_job(job_id)
         _record_job_metrics(job_type, status, start_ts)
 
 

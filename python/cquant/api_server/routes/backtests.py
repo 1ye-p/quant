@@ -18,7 +18,15 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from cquant.api_server.deps import CatalogDep, KBServiceDep, run_job_async
+from cquant.api_server.deps import (
+    CatalogDep,
+    KBServiceDep,
+    get_job_cancel_event,
+    get_job_progress,
+    run_job_async,
+    set_job_stage,
+)
+from cquant.core.jobs import JobCancelledError
 from cquant.backtest_vector.sensitivity import GridSearchSensitivity
 
 _ARTIFACTS_BASE = pathlib.Path("data/backtest_artifacts").resolve()
@@ -679,11 +687,20 @@ async def create_backtest(
     _save_job(catalog, job_id, job_type="backtest", status="running")
 
     def _run_job() -> None:
+        # P5: cooperative cancel + staged progress. The cancel event lives in
+        # the job registry (created by run_job_async before this body starts);
+        # engine/fill day-loop checkpoints raise JobCancelledError which must
+        # propagate (handled + persisted by run_job_async).
+        spec.cancel_event = get_job_cancel_event(job_id)
+        spec.stage_cb = lambda stage: set_job_stage(job_id, stage)
+        set_job_stage(job_id, "loading")
         try:
             run_id = _run_backtest(catalog, spec)
+            set_job_stage(job_id, "persisting")
             _save_job(catalog, job_id, "backtest", "completed", run_id=run_id)
             # Auto-trigger overfitting analysis after successful backtest
             try:
+                set_job_stage(job_id, "analyzing")
                 from cquant.bt_analyzer.run import (
                     AnalysisRunner, AnalysisRunSpec, load_result,
                 )
@@ -693,6 +710,8 @@ async def create_backtest(
                     AnalysisRunSpec(backtest_run_id=run_id),
                 )
                 logger.info("Auto-analysis completed for run %s", run_id)
+            except JobCancelledError:
+                raise
             except Exception as analysis_exc:
                 # Annotate the failure in the job record's error field, but keep
                 # the backtest's completed status — the backtest itself succeeded
@@ -705,11 +724,14 @@ async def create_backtest(
                         f"failed: {str(analysis_exc)[:200]}"
                     ),
                 )
+        except JobCancelledError:
+            # 取消/超时——run_job_async 负责终态持久化（诊断优先：已写产物保留）
+            raise
         except Exception as exc:
             logger.exception("Backtest job %s failed", job_id)
             _save_job(catalog, job_id, "backtest", "failed", error=f"Backtest failed: {str(exc)[:200]}")
 
-    background_tasks.add_task(run_job_async, _run_job)
+    background_tasks.add_task(run_job_async, _run_job, job_id=job_id, job_type="backtest", catalog=catalog)
     resp = {"job_id": job_id, "strategy_id": body.strategy_id, "status": "running", "warning": scoring_date_warning}
     # P3-6: warnings 仅在 dsl_spec 含 regime 段时出现（可能为空列表）；
     # 非 DSL / 无 regime 创建路径响应零变化。
@@ -723,11 +745,19 @@ async def get_job_status(job_id: str, catalog: CatalogDep) -> dict:
     """查询回测任务运行状态。
 
     Returns {job_id, status: running|completed|failed, run_id: str|None, error: str|None}
+    P5: running 时额外附带 job 注册表的实时进度（stage / elapsed_s /
+    cancel_requested / stage_history），供前端展示「当前阶段+已用时」。
     """
     _ensure_job_table(catalog)
     job = _load_job(catalog, job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    progress = get_job_progress(job_id)
+    if progress is not None and job.get("status") == "running":
+        job["stage"] = progress["stage"]
+        job["elapsed_s"] = progress["elapsed_s"]
+        job["cancel_requested"] = progress["cancel_requested"]
+        job["stage_history"] = progress["stage_history"]
     return {"job_id": job_id, **job}
 
 
@@ -1146,6 +1176,7 @@ async def trigger_analysis(
     _save_job(catalog, job_id, job_type="analysis", status="running")
 
     def _run_analysis() -> None:
+        set_job_stage(job_id, "analyzing")
         try:
             from cquant.bt_analyzer.run import (
                 AnalysisRunner, AnalysisRunSpec, load_result,
@@ -1160,11 +1191,13 @@ async def trigger_analysis(
                 embargo_days=embargo_days,
             ))
             _save_job(catalog, job_id, "analysis", "completed", run_id=report.analysis_run_id)
+        except JobCancelledError:
+            raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:
             logger.exception("Analysis job %s failed", job_id)
             _save_job(catalog, job_id, "analysis", "failed", run_id=run_id, error=f"Analysis failed: {str(exc)[:200]}")
 
-    background_tasks.add_task(run_job_async, _run_analysis)
+    background_tasks.add_task(run_job_async, _run_analysis, job_id=job_id, job_type="analysis", catalog=catalog)
     return {"job_id": job_id, "run_id": run_id, "status": "running"}
 
 
@@ -3170,8 +3203,10 @@ async def run_sensitivity_analysis(
     _save_job(catalog, job_id, job_type="sensitivity", status="running", run_id=run_id)
 
     def _run_sensitivity():
-        start_time = time.time()
-        timeout_seconds = 1800  # 30 minutes
+        # P5: 旧的运行前单点假超时预检（1800s、只在跑之前检查一次、跑起来
+        # 之后永不生效）已删除——超时统一走 job 层 deadline watcher
+        # （CQUANT_JOB_TIMEOUT_SEC，默认 3600s）+ 引擎/fill 协作检查点。
+        set_job_stage(job_id, "loading")
         try:
             # Load original backtest run info
             run_row = catalog.query(
@@ -3230,6 +3265,9 @@ async def run_sensitivity_analysis(
                 extra={"catalog": catalog},
                 # B1 装配：DSL regime 段 → 状态机（无 regime 保持 None）
                 regime_sm=runner._regime_sm_for_strategy(strategy),
+                # P5: 协作取消 + 阶段进度传入引擎/fill 日循环检查点
+                cancel_event=get_job_cancel_event(job_id),
+                stage_cb=lambda stage: set_job_stage(job_id, stage),
             )
 
             # Create ParameterGrid and run sensitivity analysis
@@ -3246,12 +3284,7 @@ async def run_sensitivity_analysis(
                 regime_sm_factory=lambda: runner._regime_sm_for_strategy(strategy),
             )
 
-            # Timeout check before running
-            if time.time() - start_time > timeout_seconds:
-                _save_job(catalog, job_id, "sensitivity", "failed",
-                          run_id=run_id, error="Timeout: exceeded 30 minutes")
-                return
-
+            set_job_stage(job_id, "grid_search")
             result = analyzer.run(catalog)
 
             # Save results
@@ -3266,6 +3299,7 @@ async def run_sensitivity_analysis(
             }
 
             # Save result to artifacts
+            set_job_stage(job_id, "persisting")
             result_dir = pathlib.Path("data/sensitivity_artifacts")
             result_dir.mkdir(parents=True, exist_ok=True)
             result_path = result_dir / f"{job_id}.json"
@@ -3274,12 +3308,14 @@ async def run_sensitivity_analysis(
             _save_job(catalog, job_id, "sensitivity", "completed", run_id=run_id)
             logger.info("Sensitivity analysis completed for job %s", job_id)
 
+        except JobCancelledError:
+            raise  # P5: 终态由 run_job_async 持久化（产物保留，诊断优先）
         except Exception as e:
             logger.exception("Sensitivity analysis failed for job %s", job_id)
             _save_job(catalog, job_id, "sensitivity", "failed",
                       run_id=run_id, error=f"Sensitivity failed: {str(e)[:300]}")
 
-    background_tasks.add_task(run_job_async, _run_sensitivity)
+    background_tasks.add_task(run_job_async, _run_sensitivity, job_id=job_id, job_type="sensitivity", catalog=catalog)
     return {"job_id": job_id, "run_id": run_id, "status": "running"}
 
 
@@ -3888,12 +3924,14 @@ async def run_validation_suite(
                 ],
             )
             _save_job(catalog, job_id, "validation_suite", "completed", run_id=run_id)
+        except JobCancelledError:
+            raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:
             logger.exception("Validation suite job %s failed", job_id)
             _save_job(catalog, job_id, "validation_suite", "failed", run_id=run_id,
                       error=f"Validation suite failed: {str(exc)[:200]}")
 
-    background_tasks.add_task(run_job_async, _run_suite)
+    background_tasks.add_task(run_job_async, _run_suite, job_id=job_id, job_type="validation_suite", catalog=catalog)
     return {"job_id": job_id, "run_id": run_id, "status": "running"}
 
 
@@ -4209,12 +4247,14 @@ async def generate_research_report(
             if not _mirror_report_to_knowledge_base(kb, report_id, run_id, content_md):
                 logger.warning("Report %s persisted to DuckDB only (KB mirror failed)", report_id)
             _save_job(catalog, job_id, "report", "completed", run_id=run_id)
+        except JobCancelledError:
+            raise  # P5: 终态由 run_job_async 持久化
         except Exception as exc:
             logger.exception("Report job %s failed", job_id)
             _save_job(catalog, job_id, "report", "failed", run_id=run_id,
                       error=f"Report failed: {str(exc)[:200]}")
 
-    background_tasks.add_task(run_job_async, _run_report)
+    background_tasks.add_task(run_job_async, _run_report, job_id=job_id, job_type="report", catalog=catalog)
     return {"job_id": job_id, "run_id": run_id, "status": "running"}
 
 

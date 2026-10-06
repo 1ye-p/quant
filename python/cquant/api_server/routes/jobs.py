@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from cquant.api_server.deps import CatalogDep, job_queue_stats
+from cquant.api_server.deps import CatalogDep, job_queue_stats, request_job_cancel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -55,7 +55,13 @@ async def cancel_job(job_id: str, catalog: CatalogDep) -> dict:
         f"UPDATE {table} SET status = 'cancelled' WHERE {id_col} = ?",
         [job_id],
     )
-    return {"job_id": job_id, "status": "cancelled"}
+    # P5: also fire the cooperative cancel event so the job's engine/fill
+    # day-loop checkpoints raise JobCancelledError and the worker thread
+    # exits at the next loop boundary (best-effort: jobs whose type has no
+    # checkpoints — e.g. ML training — finish naturally and keep this
+    # DB-level 'cancelled' status).
+    cooperative = request_job_cancel(job_id)
+    return {"job_id": job_id, "status": "cancelled", "cooperative": cooperative}
 
 
 @router.delete("/{job_id}")

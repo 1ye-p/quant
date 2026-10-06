@@ -23,6 +23,7 @@ import polars as pl
 from cquant.backtest_vector.costs import CostModel
 from cquant.backtest_vector.limit_rules import is_at_limit_up as _is_limit_up, is_at_limit_down as _is_limit_down
 from cquant.core.enums import TradabilityReason
+from cquant.core.jobs import JobCancelledError
 from cquant.market_calendar.rules.base import TradabilityResult
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,8 @@ class AShareFillSimulator:
         prices: pl.DataFrame,
         initial_cash: Decimal,
         suspension_col: str = "is_suspended",
+        *,
+        cancel_event: "threading.Event | None" = None,
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """Simulate fills from target weights and prices.
 
@@ -272,6 +275,9 @@ class AShareFillSimulator:
             prices: [asset_id, trade_date, open, high, low, close, volume, is_suspended]
             initial_cash: Starting cash amount
             suspension_col: Column name for suspension flag
+            cancel_event: P5 cooperative-cancel checkpoint at the day-loop
+                top. ``None`` (default) is a zero-cost pass-through —
+                behaviour is bit-identical to pre-P5.
 
         Returns:
             (fills_df, portfolio_snapshots_df)
@@ -282,7 +288,9 @@ class AShareFillSimulator:
         # P2b (2026-10-06): array-backed columnar lookup — same accessor
         # semantics as the legacy dict, algorithm below is unchanged.
         price_lookup = self._build_price_arrays(prices, suspension_col)
-        return self._simulate_impl(target_weights, price_lookup, initial_cash)
+        return self._simulate_impl(
+            target_weights, price_lookup, initial_cash, cancel_event=cancel_event
+        )
 
     def simulate_reference(
         self,
@@ -290,6 +298,8 @@ class AShareFillSimulator:
         prices: pl.DataFrame,
         initial_cash: Decimal,
         suspension_col: str = "is_suspended",
+        *,
+        cancel_event: "threading.Event | None" = None,
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """Parity oracle — the legacy per-row dict-lookup path.
 
@@ -301,13 +311,17 @@ class AShareFillSimulator:
         if target_weights.is_empty():
             return self._empty_fills(), self._empty_snapshots()
         price_lookup = self._build_price_lookup(prices, suspension_col)
-        return self._simulate_impl(target_weights, price_lookup, initial_cash)
+        return self._simulate_impl(
+            target_weights, price_lookup, initial_cash, cancel_event=cancel_event
+        )
 
     def _simulate_impl(
         self,
         target_weights: pl.DataFrame,
         price_lookup,
         initial_cash: Decimal,
+        *,
+        cancel_event: "threading.Event | None" = None,
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         """Shared day loop — works against either lookup representation."""
 
@@ -323,6 +337,9 @@ class AShareFillSimulator:
         trade_dates = sorted(target_weights["trade_date"].unique().to_list())
 
         for td in trade_dates:
+            # P5 cooperative-cancel checkpoint (day-loop granularity).
+            if cancel_event is not None and cancel_event.is_set():
+                raise JobCancelledError(reason="cancelled")
             # Get target weights for this date
             day_weights = target_weights.filter(pl.col("trade_date") == td)
             target_dict = dict(zip(

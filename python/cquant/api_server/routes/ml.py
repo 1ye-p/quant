@@ -248,8 +248,11 @@ async def submit_ml_job(
          body.target_name, json.dumps(body.params), now],
     )
 
+    # P5: job_id → 注册表覆盖（取消事件 + deadline watcher）。不传 catalog：
+    # ML job 状态表是 meta_ml_jobs，超时持久化不走 _api_jobs。
     background_tasks.add_task(
-        run_job_async, _run_ml_job, job_id, body, catalog
+        run_job_async, _run_ml_job, job_id, body, catalog,
+        job_id=job_id, job_type="ml",
     )
     return {"job_id": job_id, "status": "submitted"}
 

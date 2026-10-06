@@ -70,8 +70,24 @@ function universeTier(id: string): UniverseTier | null {
   return TIER_KNOWN_MID.includes(id) ? 'mid' : null
 }
 
+// P5 staged progress: backend job stage → i18n label (raw key as fallback)
+const STAGE_I18N_KEYS: Record<string, string> = {
+  loading: 'common.stage_loading',
+  signals: 'common.stage_signals',
+  fills: 'common.stage_fills',
+  persisting: 'common.stage_persisting',
+  analyzing: 'common.stage_analyzing',
+  grid_search: 'common.stage_grid_search',
+}
+
+
 export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRunModalProps) {
   const { t } = useTranslation()
+
+  const stageLabel = (stage: string): string => {
+    const key = STAGE_I18N_KEYS[stage]
+    return key ? t(key) : stage
+  }
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -613,7 +629,15 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
           {jobId && jobStatus?.status === 'running' && (
             <div className="flex items-center gap-2 text-sm text-blue-600">
               <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full" />
-              {t('common.running')}
+              <span data-testid="job-stage">
+                {t('common.running')}
+                {jobStatus.stage && (
+                  <> · {stageLabel(jobStatus.stage)}</>
+                )}
+                {jobStatus.elapsed_s != null && (
+                  <> （{t('common.elapsed_seconds', { s: Math.floor(jobStatus.elapsed_s) })}）</>
+                )}
+              </span>
             </div>
           )}
           {jobId && jobStatus?.status === 'failed' && (

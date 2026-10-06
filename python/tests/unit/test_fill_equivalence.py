@@ -285,3 +285,261 @@ def test_lookup_build_perf_smoke() -> None:
         f"_build_price_lookup 构建耗时 {elapsed:.2f}s ≥ 10s——"
         f"pre-sorted 重构退化（P2a 性能门槛）"
     )
+
+
+# ---------------------------------------------------------------------------
+# ⑥ P2b 三层等价之第三层：新向量化 simulate（array lookup）vs 旧 dict 逐行
+#    循环 oracle（simulate_reference）——同算法异表示，逐 fill 位级一致。
+#    逐项语义命名断言：buys 日顺序预算 / 涨跌停 / T+1 / 量能 / 冲击 / 整手。
+# ---------------------------------------------------------------------------
+
+def _assert_simulate_oracle_parity(
+    weights: pl.DataFrame, prices: pl.DataFrame
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """新向量化路径 vs 旧 dict 循环 oracle：fills + snapshots 位级一致。"""
+    sim = AShareFillSimulator()
+    fills_new, snaps_new = sim.simulate(
+        target_weights=weights, prices=prices, initial_cash=gen.INITIAL_CASH)
+    fills_old, snaps_old = sim.simulate_reference(
+        target_weights=weights, prices=prices, initial_cash=gen.INITIAL_CASH)
+
+    key = ["trade_date", "asset_id", "side"]
+    assert_frame_equal(
+        fills_new.sort(key), fills_old.sort(key), check_exact=True,
+        check_column_order=False,
+    )
+    assert_frame_equal(
+        snaps_new.sort("trade_date"), snaps_old.sort("trade_date"), check_exact=True,
+        check_column_order=False,
+    )
+    return fills_new, snaps_new
+
+
+def _mk_prices(rows: list[dict]) -> pl.DataFrame:
+    schema = {
+        "asset_id": pl.Utf8, "trade_date": pl.Date,
+        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64,
+        "close": pl.Float64, "volume": pl.Float64,
+        "adj_factor": pl.Float64, "is_suspended": pl.Boolean,
+    }
+    return pl.DataFrame(rows, schema=schema)
+
+
+def _days(n: int) -> list[date]:
+    out, d = [], date(2025, 3, 3)
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def test_oracle_parity_synthetic_full_rebalance_cycle() -> None:
+    """synthetic fixture 全程每日调仓：新向量化 vs 旧循环 oracle 位级一致
+    （覆盖 ST/涨跌停/停牌/新股/正常资产混合路径 + buys 日）。"""
+    prices = gen.build_synthetic_prices()
+    trade_dates = sorted(prices["trade_date"].unique().to_list())
+    top6 = [gen.ST_ASSET, gen.LIMIT_UP_ASSET, gen.LIMIT_DOWN_ASSET,
+            gen.SUSPENDED_ASSET, gen.NEW_LISTING_ASSET, gen.NORMAL_TOP_ASSET]
+    weights = pl.DataFrame([
+        {"trade_date": td, "asset_id": aid, "target_weight": 1.0 / 6}
+        for td in trade_dates[15:] for aid in top6
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    assert not fills.is_empty(), "场景未产生 fills——oracle 对照失效"
+
+
+def test_oracle_parity_buy_day_sequential_budget() -> None:
+    """buys 日/顺序预算：现金不足时行序靠前者足额、靠后者被挤压（§4.1 实例）
+    ——两条路径逐 fill 位级一致，且挤压方向锁定（不许按权重重排）。"""
+    d1, d2, d3 = _days(3)
+    prices = _mk_prices([
+        {"asset_id": a, "trade_date": d, "open": 10.0, "high": 10.0,
+         "low": 10.0, "close": 10.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False}
+        for a in ("SSE:A", "SSE:B") for d in (d1, d2, d3)
+    ])
+    # nav=100k；A 目标 60k 足额，B 目标 60k 只剩 ~40k×0.98 → 被挤压
+    weights = pl.DataFrame([
+        {"trade_date": d1, "asset_id": "SSE:A", "target_weight": 0.60},
+        {"trade_date": d1, "asset_id": "SSE:B", "target_weight": 0.60},
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    buys = fills.filter(pl.col("side") == "buy").sort("asset_id")
+    qty = dict(zip(buys["asset_id"].to_list(), buys["qty"].to_list()))
+    assert qty["SSE:A"] == 60000, "行序第一的 A 必须足额（60000 股×10 元）"
+    assert qty["SSE:B"] < 60000, "行序第二的 B 必须被现金挤压"
+
+
+def test_oracle_parity_limit_up_down_blocks() -> None:
+    """涨跌停：涨停封板（close==high==prev×1.10）买入拒绝 + 跌停卖出拒绝，
+    两路径逐 fill 位级一致。"""
+    d1, d2, d3 = _days(3)
+    rows = []
+    # L: d2 涨停一字（close==high==prev*1.10）
+    rows += [
+        {"asset_id": "SSE:L", "trade_date": d1, "open": 10.0, "high": 10.1,
+         "low": 9.9, "close": 10.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False},
+        {"asset_id": "SSE:L", "trade_date": d2, "open": 11.0, "high": 11.0,
+         "low": 10.8, "close": 11.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False},
+        {"asset_id": "SSE:L", "trade_date": d3, "open": 10.0, "high": 10.2,
+         "low": 9.8, "close": 10.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False},
+    ]
+    # N: 正常资产（对照，d2 买入成功）
+    rows += [
+        {"asset_id": "SSE:N", "trade_date": d, "open": 20.0, "high": 20.2,
+         "low": 19.8, "close": 20.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False}
+        for d in (d1, d2, d3)
+    ]
+    prices = _mk_prices(rows)
+    weights = pl.DataFrame([
+        {"trade_date": d2, "asset_id": "SSE:L", "target_weight": 0.50},
+        {"trade_date": d2, "asset_id": "SSE:N", "target_weight": 0.50},
+        {"trade_date": d3, "asset_id": "SSE:L", "target_weight": 0.10},
+        {"trade_date": d3, "asset_id": "SSE:N", "target_weight": 0.10},
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    assert fills.filter(
+        (pl.col("trade_date") == d2) & (pl.col("asset_id") == "SSE:L")
+        & (pl.col("side") == "buy")
+    ).is_empty(), "涨停一字板 d2 必须买不进"
+    assert fills.filter(
+        (pl.col("trade_date") == d2) & (pl.col("asset_id") == "SSE:N")
+    ).height > 0, "对照资产 d2 正常成交"
+
+
+def test_oracle_parity_t_plus_one_and_limit_down_exit() -> None:
+    """T+1/跌停退出：d1 买入 → d2 目标清零（T+1 允许次日卖，但 d2 一字跌停
+    卖出被拒）→ d3 复牌清仓成交。两路径位级一致。"""
+    d1, d2, d3 = _days(3)
+    rows = [
+        {"asset_id": "SSE:T", "trade_date": d1, "open": 10.0, "high": 10.1,
+         "low": 9.9, "close": 10.0, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False},
+        # d3 复牌但价格须在涨跌停带内（9.0 的 ±10% → 8.1~9.9），取 9.5
+        {"asset_id": "SSE:T", "trade_date": d3, "open": 9.5, "high": 9.6,
+         "low": 9.4, "close": 9.5, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False},
+    ] + [{
+        # d2 一字跌停：open==high==low==close==prev(10.0)×0.90
+        "asset_id": "SSE:T", "trade_date": d2, "open": 9.0, "high": 9.0,
+        "low": 9.0, "close": 9.0, "volume": 1e8, "adj_factor": 1.0,
+        "is_suspended": False,
+    }]
+    prices = _mk_prices(rows)
+    weights = pl.DataFrame([
+        {"trade_date": d1, "asset_id": "SSE:T", "target_weight": 0.90},
+        {"trade_date": d2, "asset_id": "SSE:T", "target_weight": 0.0},
+        {"trade_date": d3, "asset_id": "SSE:T", "target_weight": 0.0},
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    assert fills.filter(
+        (pl.col("trade_date") == d1) & (pl.col("side") == "buy")
+    ).height == 1, "d1 必须建仓"
+    assert fills.filter(
+        (pl.col("trade_date") == d2) & (pl.col("side") == "sell")
+    ).is_empty(), "d2 一字跌停卖出必须被拒"
+    assert fills.filter(
+        (pl.col("trade_date") == d3) & (pl.col("side") == "sell")
+    ).height == 1, "d3 复牌必须清仓（T+1 次日可卖语义）"
+
+
+def test_oracle_parity_volume_constraint_and_impact_slippage() -> None:
+    """量能参与度 + 冲击滑点：volume=1e4、max_volume_pct=0.1 → clip 至 1000 股；
+    participation=10% > 1% 触发 sqrt 冲击滑点。两路径位级一致。"""
+    d1, d2 = _days(2)
+    prices = _mk_prices([
+        {"asset_id": "SSE:V", "trade_date": d, "open": 10.0, "high": 10.1,
+         "low": 9.9, "close": 10.0, "volume": 10_000.0, "adj_factor": 1.0,
+         "is_suspended": False}
+        for d in (d1, d2)
+    ])
+    weights = pl.DataFrame([
+        {"trade_date": d1, "asset_id": "SSE:V", "target_weight": 0.50},
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    buy = fills.filter(pl.col("side") == "buy")
+    assert buy.height == 1 and buy["qty"][0] == 1000, "量能约束必须 clip 至 1000 股"
+    # 冲击滑点已含于 slippage：notional×0.001（participation 0.1 / pct 0.1）
+    expect_impact = buy["notional"][0] * 0.001
+    assert buy["slippage"][0] >= expect_impact - 1e-9, "sqrt 冲击滑点必须计入"
+
+
+def test_oracle_parity_lot_rounding() -> None:
+    """整手：任意权重下成交股数必须是 100 的整数倍。两路径位级一致。"""
+    d1, d2 = _days(2)
+    prices = _mk_prices([
+        {"asset_id": "SSE:R", "trade_date": d, "open": 7.77, "high": 7.9,
+         "low": 7.6, "close": 7.77, "volume": 1e8, "adj_factor": 1.0,
+         "is_suspended": False}
+        for d in (d1, d2)
+    ])
+    weights = pl.DataFrame([
+        {"trade_date": d1, "asset_id": "SSE:R", "target_weight": 0.333},
+    ])
+    fills, _ = _assert_simulate_oracle_parity(weights, prices)
+    assert not fills.is_empty()
+    assert all(q % 100 == 0 for q in fills["qty"].to_list()), "股数必须整手"
+
+
+def test_array_lookup_matches_dict_lookup_values() -> None:
+    """array lookup vs dict lookup 逐 (td, aid) 逐字段值全等（含缺失键默认值）。
+    构造含缺行/停牌/缺口的帧 + 一个 prices 里不存在的日期。"""
+    prices = _gappy_prices()
+    sim = AShareFillSimulator()
+    dict_lk = sim._build_price_lookup(prices, "is_suspended")
+    arr_lk = sim._build_price_arrays(prices, "is_suspended")
+
+    for (td, aid), ref in dict_lk.items():
+        row = arr_lk.row(td, aid)
+        assert row is not None, f"array lookup 缺失 {(td, aid)}"
+        for k, v in ref.items():
+            assert row[k] == v, f"{(td, aid)}.{k}: {row[k]} != {v}"
+    # 缺失键默认：prices 中不存在的日期 / 未知资产
+    missing_day = date(2025, 1, 11)
+    assert missing_day not in arr_lk.date_idx
+    assert arr_lk.get_price(missing_day, "SSE:A") == 0.0
+    assert arr_lk.get_price(missing_day, "SSE:A", "adj_factor") == 0.0
+    assert arr_lk.is_suspended_at(missing_day, "SSE:A") is False
+    assert arr_lk.row(missing_day, "SSE:A") is None
+    assert arr_lk.get_price(prices["trade_date"][0], "SSE:ZZZ") == 0.0
+
+
+def test_array_lookup_build_perf_smoke() -> None:
+    """P2b 门槛：1500×500=750,000 行列式构建 < 5s（dict 路径同规模 ~4.3s，
+    逐行 dict 第一遍在 5000×500 曾达 123s+——列式构建必须远低于 dict 冒烟阈值）。"""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    n_assets, n_days = 1500, 500
+    total = n_assets * n_days
+    aids = np.tile(np.array([f"SSE:{i:06d}" for i in range(n_assets)]), n_days)
+    d0 = date(2024, 1, 1)
+    days, d = [], d0
+    while len(days) < n_days:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    dates = np.repeat(np.array(days, dtype="datetime64[D]"), n_assets)
+    closes = rng.uniform(5, 50, size=total)
+    prices = pl.DataFrame({
+        "asset_id": aids,
+        "trade_date": pl.Series(dates).cast(pl.Date),
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": np.full(total, 1e6),
+        "adj_factor": np.ones(total),
+        "is_suspended": np.zeros(total, dtype=bool),
+    })
+
+    sim = AShareFillSimulator()
+    t0 = time.perf_counter()
+    lk = sim._build_price_arrays(prices, "is_suspended")
+    elapsed = time.perf_counter() - t0
+    assert lk.present.sum() == total
+    assert elapsed < 5.0, (
+        f"_build_price_arrays 列式构建耗时 {elapsed:.2f}s ≥ 5s——"
+        f"P2b 性能门槛失败"
+    )

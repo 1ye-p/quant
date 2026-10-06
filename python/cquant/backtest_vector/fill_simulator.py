@@ -47,6 +47,159 @@ class FillRecord:
     total_cost: float
 
 
+class _ArrayPriceLookup:
+    """Columnar price lookup — array-backed twin of the legacy dict lookup.
+
+    Introduced by P2b (2026-10-06, design 2026-08-09 v2.0 方案 A 阶段 1).
+    Replaces the per-row Python dict build (``_build_price_lookup``) with
+    Polars/NumPy columnar construction; the day-loop algorithm is unchanged
+    and talks to this structure through the same accessor semantics:
+
+    - absent (trade_date, asset_id) → same defaults as ``dict.get(..., {})``
+      (price 0.0, not suspended, no prev_close …);
+    - per-field null/zero coercion identical to the dict path
+      (open/high/low/close/volume: null → 0.0; adj_factor: null **or 0** → 1.0);
+    - ``prev_close`` = close of the previous *available* row per asset;
+      first row per asset = its own close.
+
+    The legacy dict implementation is retained as ``AShareFillSimulator.
+    _build_price_lookup`` + ``simulate_reference`` and serves as the parity
+    oracle (do not remove).
+    """
+
+    __slots__ = (
+        "dates", "date_idx", "asset_ids", "asset_idx",
+        "_mats", "present", "is_suspended",
+    )
+
+    def __init__(self, dates, date_idx, asset_ids, asset_idx, mats, present, is_suspended):
+        self.dates = dates
+        self.date_idx = date_idx
+        self.asset_ids = asset_ids
+        self.asset_idx = asset_idx
+        self._mats = mats  # field -> np.ndarray [n_dates, n_assets] (float64)
+        self.present = present  # bool [n_dates, n_assets]
+        self.is_suspended = is_suspended  # bool [n_dates, n_assets]
+
+    @classmethod
+    def build(cls, prices: pl.DataFrame, suspension_col: str) -> "_ArrayPriceLookup":
+        import numpy as np
+
+        n = prices.height
+        asset_ids: list[str] = prices["asset_id"].unique().sort().to_list()
+        dates: list[date] = prices["trade_date"].unique().sort().to_list()
+        asset_idx = {a: i for i, a in enumerate(asset_ids)}
+        date_idx = {d: i for i, d in enumerate(dates)}
+        n_dates, n_assets = len(dates), len(asset_ids)
+
+        # Row → (date, asset) matrix coordinates via hash joins (Rust-side,
+        # no per-row Python). maintain_order="left" is *load-bearing*: the
+        # resulting __di/__ai arrays must stay aligned with per-column
+        # ``to_numpy()`` reads taken in frame order.
+        coded = prices.select("trade_date", "asset_id")
+        coded = coded.join(
+            pl.DataFrame({"trade_date": dates, "__di": range(n_dates)}),
+            on="trade_date", maintain_order="left",
+        ).join(
+            pl.DataFrame({"asset_id": asset_ids, "__ai": range(n_assets)}),
+            on="asset_id", maintain_order="left",
+        )
+        di = coded["__di"].to_numpy()
+        ai = coded["__ai"].to_numpy()
+
+        def _field(name: str, default: float, zero_to: float | None = None) -> np.ndarray:
+            """Columnar twin of ``float(row.get(name, default) or default)``.
+
+            zero_to: when set, a *zero or null* value coerces to it (only
+            adj_factor uses 0 → 1.0; the OHLCV fields map 0 → 0, a no-op).
+            """
+            if name in prices.columns:
+                vals = prices[name].cast(pl.Float64).fill_null(default).to_numpy().copy()
+                if zero_to is not None:
+                    vals[vals == 0.0] = zero_to
+            else:
+                vals = np.full(n, default, dtype=np.float64)
+            mat = np.zeros((n_dates, n_assets), dtype=np.float64)
+            mat[di, ai] = vals  # last write wins — same as dict overwrite
+            return mat
+
+        mats = {
+            "open": _field("open", 0.0),
+            "high": _field("high", 0.0),
+            "low": _field("low", 0.0),
+            "close": _field("close", 0.0),
+            "volume": _field("volume", 0.0),
+            "adj_factor": _field("adj_factor", 1.0, zero_to=1.0),
+        }
+
+        # prev_close: previous *available* row's close per asset; first row
+        # per asset = own close. Same semantics as the dict path's per-asset
+        # sorted forward walk. Vectorized: stable sort by (asset, date), then
+        # shift-by-one within each asset run.
+        close_flat = mats["close"][di, ai]
+        order = np.lexsort((di, ai))  # stable: preserves row order on ties
+        s_ai = ai[order]
+        s_close = close_flat[order]
+        prev_sorted = np.empty(n, dtype=np.float64)
+        prev_sorted[0] = s_close[0]
+        if n > 1:
+            same_asset = s_ai[1:] == s_ai[:-1]
+            prev_sorted[1:] = np.where(same_asset, s_close[:-1], s_close[1:])
+        prev_mat = np.zeros((n_dates, n_assets), dtype=np.float64)
+        prev_mat[di, ai] = prev_sorted[np.argsort(order, kind="stable")]
+        mats["prev_close"] = prev_mat
+
+        if suspension_col in prices.columns:
+            susp = prices[suspension_col].fill_null(False).cast(pl.Boolean).to_numpy()
+        else:
+            susp = np.zeros(n, dtype=bool)
+        susp_mat = np.zeros((n_dates, n_assets), dtype=bool)
+        susp_mat[di, ai] = susp
+
+        present = np.zeros((n_dates, n_assets), dtype=bool)
+        present[di, ai] = True
+
+        return cls(dates, date_idx, asset_ids, asset_idx, mats, present, susp_mat)
+
+    def get_price(self, td: date, asset_id: str, field: str = "close") -> float:
+        di = self.date_idx.get(td)
+        if di is None:
+            return 0.0
+        ai = self.asset_idx.get(asset_id)
+        if ai is None or not self.present[di, ai]:
+            return 0.0
+        return float(self._mats[field][di, ai])
+
+    def is_suspended_at(self, td: date, asset_id: str) -> bool:
+        di = self.date_idx.get(td)
+        if di is None:
+            return False
+        ai = self.asset_idx.get(asset_id)
+        if ai is None or not self.present[di, ai]:
+            return False
+        return bool(self.is_suspended[di, ai])
+
+    def row(self, td: date, asset_id: str) -> dict | None:
+        """8-field row dict (or None when absent) — same shape the legacy
+        dict lookup stored per (td, asset_id) key."""
+        di = self.date_idx.get(td)
+        if di is None:
+            return None
+        ai = self.asset_idx.get(asset_id)
+        if ai is None or not self.present[di, ai]:
+            return None
+        return {
+            "open": float(self._mats["open"][di, ai]),
+            "high": float(self._mats["high"][di, ai]),
+            "low": float(self._mats["low"][di, ai]),
+            "close": float(self._mats["close"][di, ai]),
+            "volume": float(self._mats["volume"][di, ai]),
+            "is_suspended": bool(self.is_suspended[di, ai]),
+            "adj_factor": float(self._mats["adj_factor"][di, ai]),
+            "prev_close": float(self._mats["prev_close"][di, ai]),
+        }
+
+
 class AShareFillSimulator:
     """Simulates A-share order execution with market constraints.
 
@@ -126,8 +279,37 @@ class AShareFillSimulator:
         if target_weights.is_empty():
             return self._empty_fills(), self._empty_snapshots()
 
-        # Build price lookup: (trade_date, asset_id) -> price data
+        # P2b (2026-10-06): array-backed columnar lookup — same accessor
+        # semantics as the legacy dict, algorithm below is unchanged.
+        price_lookup = self._build_price_arrays(prices, suspension_col)
+        return self._simulate_impl(target_weights, price_lookup, initial_cash)
+
+    def simulate_reference(
+        self,
+        target_weights: pl.DataFrame,
+        prices: pl.DataFrame,
+        initial_cash: Decimal,
+        suspension_col: str = "is_suspended",
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Parity oracle — the legacy per-row dict-lookup path.
+
+        Identical algorithm to :meth:`simulate`, differing *only* in the
+        price-lookup representation (dict built row-by-row vs columnar
+        arrays). Retained as the D5-B oracle (design 2026-08-09 v2.0 §6.2);
+        do not optimise or remove.
+        """
+        if target_weights.is_empty():
+            return self._empty_fills(), self._empty_snapshots()
         price_lookup = self._build_price_lookup(prices, suspension_col)
+        return self._simulate_impl(target_weights, price_lookup, initial_cash)
+
+    def _simulate_impl(
+        self,
+        target_weights: pl.DataFrame,
+        price_lookup,
+        initial_cash: Decimal,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Shared day loop — works against either lookup representation."""
 
         # Track portfolio state
         cash = float(initial_cash)
@@ -267,18 +449,35 @@ class AShareFillSimulator:
                 prev_close = data["close"]
         return lookup
 
-    def _get_price(self, td: date, asset_id: str, lookup: dict, field: str = "close") -> float:
+    def _build_price_arrays(self, prices: pl.DataFrame, suspension_col: str) -> _ArrayPriceLookup:
+        """Columnar array-backed price lookup (P2b). Semantics locked to the
+        dict oracle by test_fill_equivalence.py (D5-B)."""
+        return _ArrayPriceLookup.build(prices, suspension_col)
+
+    def _get_price(self, td: date, asset_id: str, lookup, field: str = "close") -> float:
         """Get price from lookup, return 0 if not found."""
+        if isinstance(lookup, _ArrayPriceLookup):
+            return lookup.get_price(td, asset_id, field)
         data = lookup.get((td, asset_id), {})
         return data.get(field, 0.0)
 
-    def _is_suspended(self, td: date, asset_id: str, lookup: dict) -> bool:
+    def _is_suspended(self, td: date, asset_id: str, lookup) -> bool:
         """Check if stock is suspended."""
+        if isinstance(lookup, _ArrayPriceLookup):
+            return lookup.is_suspended_at(td, asset_id)
         data = lookup.get((td, asset_id), {})
         return data.get("is_suspended", False)
 
-    def _is_at_limit_up(self, td: date, asset_id: str, lookup: dict) -> bool:
+    def _is_at_limit_up(self, td: date, asset_id: str, lookup) -> bool:
         """Check if stock is at price limit up (涨停)."""
+        if isinstance(lookup, _ArrayPriceLookup):
+            row = lookup.row(td, asset_id)
+            if row is None:
+                return False
+            close, high, prev_close = row["close"], row["high"], row["prev_close"]
+            if prev_close <= 0:
+                return False
+            return _is_limit_up(close, prev_close, asset_id) and close == high
         key = (td, asset_id)
         if key not in lookup:
             return False
@@ -288,8 +487,16 @@ class AShareFillSimulator:
             return False
         return _is_limit_up(close, prev_close, asset_id) and close == high
 
-    def _is_at_limit_down(self, td: date, asset_id: str, lookup: dict) -> bool:
+    def _is_at_limit_down(self, td: date, asset_id: str, lookup) -> bool:
         """Check if stock is at price limit down (跌停)."""
+        if isinstance(lookup, _ArrayPriceLookup):
+            row = lookup.row(td, asset_id)
+            if row is None:
+                return False
+            close, low, prev_close = row["close"], row["low"], row["prev_close"]
+            if prev_close <= 0:
+                return False
+            return _is_limit_down(close, prev_close, asset_id) and close == low
         key = (td, asset_id)
         if key not in lookup:
             return False
@@ -306,13 +513,22 @@ class AShareFillSimulator:
             return True  # Position existed before backtest start
         return last_buy < td  # Must be strictly before today
 
-    def _is_price_valid(self, td: date, asset_id: str, lookup: dict) -> bool:
+    def _is_price_valid(self, td: date, asset_id: str, lookup) -> bool:
         """Check if close price is within reasonable range of prev_close.
 
         Rejects prices that exceed ±30% from prev_close, which catches data quality
         issues (e.g., close=0.01 with high=3.00) while allowing legitimate limit moves.
         The more precise limit_up/limit_down checks handle actual trading constraints.
         """
+        if isinstance(lookup, _ArrayPriceLookup):
+            data = lookup.row(td, asset_id)
+            if data is None:
+                return False
+            close, prev_close = data["close"], data["prev_close"]
+            if prev_close <= 0 or close <= 0:
+                return False
+            ratio = close / prev_close
+            return 0.5 <= ratio <= 2.0
         data = lookup.get((td, asset_id), {})
         if not data:
             return False
@@ -323,10 +539,13 @@ class AShareFillSimulator:
         ratio = close / prev_close
         return 0.5 <= ratio <= 2.0
 
-    def _check_tradability(self, td: date, asset_id: str, lookup: dict) -> TradabilityResult:
+    def _check_tradability(self, td: date, asset_id: str, lookup) -> TradabilityResult:
         """Check tradability using market rules layer if available, else legacy."""
-        if self._rules:
+        if isinstance(lookup, _ArrayPriceLookup):
+            data: dict = lookup.row(td, asset_id) or {}
+        else:
             data = lookup.get((td, asset_id), {})
+        if self._rules:
             bar = {
                 "open": data.get("open", 0),
                 "high": data.get("high", 0),
@@ -347,7 +566,7 @@ class AShareFillSimulator:
         return int(qty // _LOT_SIZE) * _LOT_SIZE
 
     def _apply_volume_constraint(
-        self, qty: int, td: date, asset_id: str, lookup: dict
+        self, qty: int, td: date, asset_id: str, lookup
     ) -> tuple[int, float]:
         """Apply volume participation constraint to order quantity.
 
@@ -357,8 +576,11 @@ class AShareFillSimulator:
         Returns:
             Tuple of (clipped_qty, volume_slippage_pct)
         """
-        data = lookup.get((td, asset_id), {})
-        volume = data.get("volume", 0)
+        if isinstance(lookup, _ArrayPriceLookup):
+            volume = lookup.get_price(td, asset_id, "volume")
+        else:
+            data = lookup.get((td, asset_id), {})
+            volume = data.get("volume", 0)
 
         if volume <= 0 or qty <= 0:
             return qty, 0.0

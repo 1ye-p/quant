@@ -1,0 +1,83 @@
+name: Perf Gate
+
+# P6 基准防回归门禁：动 engine.py / fill_simulator.py 的提交必跑基准，
+# wall 回归 > 阈值（默认 30%）→ 拦截（exit 1）。
+# 独立 workflow 而非在 ci.yml 加 paths——事件级 paths 过滤会作用于整个
+# workflow（连带跳过 lint/test），必须拆文件才是最小接入。
+#
+# 阈值可用 repo 变量/环境覆盖：CQUANT_BENCH_THRESHOLD（百分比，默认 30）。
+# 基线：configs/benchmarks/baseline/（随仓库提交的 canonical det 基线；
+# 若 CI 机型与录制机型差异导致持续误报，用 nightly 产物在同型 runner
+# 上重录基线并替换该文件）。
+
+on:
+  push:
+    branches: ["main", "dev"]
+    paths:
+      - "python/cquant/backtest_vector/engine.py"
+      - "python/cquant/backtest_vector/fill_simulator.py"
+      - "scripts/benchmark_backtest.py"
+      - "scripts/benchmark_fill_simulator.py"
+      - "scripts/bench_common.py"
+      - "configs/benchmarks/baseline/**"
+      - ".github/workflows/perf-gate.yml"
+  pull_request:
+    paths:
+      - "python/cquant/backtest_vector/engine.py"
+      - "python/cquant/backtest_vector/fill_simulator.py"
+      - "scripts/benchmark_backtest.py"
+      - "scripts/benchmark_fill_simulator.py"
+      - "scripts/bench_common.py"
+      - "configs/benchmarks/baseline/**"
+      - ".github/workflows/perf-gate.yml"
+
+jobs:
+  benchmark-gate:
+    name: Benchmark wall regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+          init-shell: bash
+
+      - name: Install package (editable)
+        shell: bash -el {0}
+        run: python -m pip install --no-deps -e .
+
+      - name: Backtest benchmark (dims gate)
+        shell: bash -el {0}
+        env:
+          CQUANT_BENCH_THRESHOLD: 30
+        run: |
+          python scripts/benchmark_backtest.py \
+            --dims 1000x250 3000x250 \
+            --threshold "${CQUANT_BENCH_THRESHOLD}" \
+            --tag ci_gate
+
+      - name: FillSimulator benchmark (wall gate)
+        shell: bash -el {0}
+        env:
+          CQUANT_BENCH_THRESHOLD: 30
+        run: |
+          python scripts/benchmark_fill_simulator.py \
+            --universe 5000 --days 500 --top-n 250 \
+            --threshold "${CQUANT_BENCH_THRESHOLD}" \
+            --out artifacts/benchmarks/ci_gate_fill.json
+
+      - name: Upload benchmark reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-reports
+          path: |
+            artifacts/benchmarks/*.json
+          if-no-files-found: ignore
+          retention-days: 14

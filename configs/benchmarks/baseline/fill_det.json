@@ -1,0 +1,120 @@
+{
+  "description": "FillSimulator 专项基准（cProfile 分段计时，Phase 0 瓶颈确认）",
+  "params": {
+    "universe": 5000,
+    "days": 500,
+    "top_n": 250,
+    "seed": 42
+  },
+  "result": {
+    "universe_size": 5000,
+    "n_days": 500,
+    "top_n": 250,
+    "n_price_rows": 2500000,
+    "data_gen_s": 11.3362,
+    "simulate_wall_s": 21.0121,
+    "simulate_cumtime_s": 20.9852,
+    "peak_memory_mb": 384.53,
+    "n_fills": 502,
+    "n_snapshots": 499,
+    "methods": {
+      "simulate": {
+        "ncalls": 1,
+        "tottime_s": 0.0019,
+        "cumtime_s": 20.9852,
+        "tottime_pct": 0.01,
+        "cumtime_pct": 100.0,
+        "percall_tot_us": 1892.932
+      },
+      "_get_price": {
+        "ncalls": 566381,
+        "tottime_s": 0.4321,
+        "cumtime_s": 4.4555,
+        "tottime_pct": 2.06,
+        "cumtime_pct": 21.23,
+        "percall_tot_us": 0.763
+      },
+      "_can_sell": {
+        "ncalls": 11267,
+        "tottime_s": 0.0175,
+        "cumtime_s": 0.0301,
+        "tottime_pct": 0.08,
+        "cumtime_pct": 0.14,
+        "percall_tot_us": 1.555
+      },
+      "_round_lot": {
+        "ncalls": 41523,
+        "tottime_s": 0.0609,
+        "cumtime_s": 0.0609,
+        "tottime_pct": 0.29,
+        "cumtime_pct": 0.29,
+        "percall_tot_us": 1.467
+      },
+      "_calculate_nav": {
+        "ncalls": 723,
+        "tottime_s": 0.0061,
+        "cumtime_s": 1.5114,
+        "tottime_pct": 0.03,
+        "cumtime_pct": 7.2,
+        "percall_tot_us": 8.485
+      },
+      "_calculate_sell_qty": {
+        "ncalls": 11267,
+        "tottime_s": 0.2372,
+        "cumtime_s": 2.9489,
+        "tottime_pct": 1.13,
+        "cumtime_pct": 14.05,
+        "percall_tot_us": 21.057
+      },
+      "_is_price_valid": {
+        "ncalls": 41021,
+        "tottime_s": 0.0929,
+        "cumtime_s": 2.1128,
+        "tottime_pct": 0.44,
+        "cumtime_pct": 10.07,
+        "percall_tot_us": 2.265
+      },
+      "_check_tradability": {
+        "ncalls": 41021,
+        "tottime_s": 0.8718,
+        "cumtime_s": 6.8644,
+        "tottime_pct": 4.15,
+        "cumtime_pct": 32.71,
+        "percall_tot_us": 21.252
+      },
+      "_apply_volume_constraint": {
+        "ncalls": 502,
+        "tottime_s": 0.0048,
+        "cumtime_s": 0.0113,
+        "tottime_pct": 0.02,
+        "cumtime_pct": 0.05,
+        "percall_tot_us": 9.531
+      },
+      "_calculate_buy_qty": {
+        "ncalls": 29754,
+        "tottime_s": 0.5545,
+        "cumtime_s": 7.6117,
+        "tottime_pct": 2.64,
+        "cumtime_pct": 36.27,
+        "percall_tot_us": 18.636
+      },
+      "_execute_sell": {
+        "ncalls": 53,
+        "tottime_s": 0.0039,
+        "cumtime_s": 0.0082,
+        "tottime_pct": 0.02,
+        "cumtime_pct": 0.04,
+        "percall_tot_us": 72.88
+      },
+      "_execute_buy": {
+        "ncalls": 449,
+        "tottime_s": 0.0341,
+        "cumtime_s": 0.0647,
+        "tottime_pct": 0.16,
+        "cumtime_pct": 0.31,
+        "percall_tot_us": 75.943
+      }
+    }
+  },
+  "gating_decision": "DECISION: YAGNI TERMINATE (项目终止). _get_price 占 2.06% (<=30%)，simulate 总耗时 21.0s < 5min；FillSimulator 非主瓶颈，无需数组化优化。"
+}

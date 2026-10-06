@@ -3,7 +3,18 @@
 
 测量维度：1000/3000/5000 股 × 250/500 日。
 记录：wall_time / peak_memory / duckdb_query_time，并按阶段拆分
-(price load / pivot / fill simulate) 以定位瓶颈。
+(price load / pivot / fill simulate / engine loop) 以定位瓶颈。
+
+引擎循环阶段（P6）：T0 基准只覆盖 数据加载→pivot→fill 三段，完全不含
+``VectorBacktestEngine._run_impl`` 逐日主循环（tradability 构建、信号生成、
+权重装配、结果持久化）——该盲区自 P6 起永久覆盖：以最小 ``BacktestSpec``
+跑通完整 ``engine.run()``，通过基准侧 monkeypatch 计时包装（不改引擎本体）
+分项记录 tradability / signal / fill / persist 耗时。
+
+防回归门禁（P6）：默认对照 canonical det 基线（``configs/benchmarks/
+baseline/backtest_det.json``，发现顺序见 ``scripts/bench_common.py``），
+任一维度 wall 回归 > 30% → exit 1。动 ``engine.py`` / ``fill_simulator.py``
+的提交必跑本基准（CI paths 门禁）。
 
 设计说明
 --------
@@ -49,6 +60,7 @@ import time
 import tracemalloc
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import duckdb
 import numpy as np
@@ -62,9 +74,20 @@ if __package__ in (None, ""):
     _repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(_repo_root / "python"))
 
-from cquant.backtest_vector.engine import VectorBacktestEngine  # noqa: E402
+from cquant.backtest_vector.engine import BacktestSpec, VectorBacktestEngine  # noqa: E402
 from cquant.backtest_vector.fill_simulator import AShareFillSimulator  # noqa: E402
 from cquant.backtest_vector.prices import adjusted_ohlc_sql  # noqa: E402
+from cquant.backtest_vector.strategy import Strategy, StrategyContext  # noqa: E402
+
+# 当作为仓库脚本运行时，scripts/ 下的共用模块可直接导入。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_common import (  # noqa: E402
+    DEFAULT_THRESHOLD_PCT,
+    evaluate_wall_gate,
+    find_baseline,
+    load_baseline,
+    print_gate_report,
+)
 
 logger = logging.getLogger("benchmark_backtest")
 
@@ -83,6 +106,12 @@ DEFAULT_DIMS: list[tuple[int, int]] = [
 TOP_N = 10
 # 初始资金，沿用生产默认（100 万）。
 INITIAL_CASH = Decimal("1_000_000")
+
+# 引擎循环阶段默认覆盖的价格行数上限（universe × days）。逐日循环含每日
+# tradability 构建（全历史 group_by）——5000×500 级别的引擎循环单独就要
+# 数十分钟，超出 nightly 预算；超过该上限的维度默认跳过（标记 skipped），
+# 可用 --engine-loop-dims 显式指定或 --no-engine-loop 全关。
+ENGINE_LOOP_MAX_ROWS = 1_500_000
 
 
 def _build_synthetic_prices(
@@ -241,7 +270,169 @@ def _build_target_weights(
     return pl.DataFrame(rows)
 
 
-def benchmark(universe_size: int, n_days: int, seed: int = 42) -> dict:
+class _BenchTopNStrategy(Strategy):
+    """极简 Top-N 等权策略——驱动引擎逐日主循环（tradability/ctx/信号装配）。
+
+    刻意做最少的信号侧工作（排序取前 N），使 engine_loop 计时反映引擎
+    循环本身的开销，而非策略计算。
+    """
+
+    def __init__(self, top_n: int) -> None:
+        self._top_n = top_n
+
+    @property
+    def strategy_id(self) -> str:
+        return "bench_top_n"
+
+    def generate_signals(self, ctx: StrategyContext):  # type: ignore[override]
+        prices = ctx.prices
+        if prices is None or prices.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "asset_id": pl.Utf8,
+                    "signal_date": pl.Date,
+                    "direction": pl.Utf8,
+                    "strength": pl.Float64,
+                    "confidence": pl.Float64,
+                }
+            )
+        ids = sorted(prices["asset_id"].unique().to_list())[: self._top_n]
+        n = len(ids)
+        return pl.DataFrame({
+            "asset_id": ids,
+            "signal_date": [ctx.as_of_date] * n,
+            "direction": ["long"] * n,
+            "strength": [1.0] * n,
+            "confidence": [1.0] * n,
+        })
+
+
+class _StageClock:
+    """基准侧计时包装器——按阶段累计被包装方法的墙钟时间。
+
+    只在基准进程内 monkeypatch（bench-only），引擎/撮合器本体零改动。
+    """
+
+    def __init__(self) -> None:
+        self.totals: dict[str, float] = {}
+
+    def wrap_instance(self, obj: object, attr: str, stage: str) -> None:
+        orig = getattr(obj, attr)
+        clock = self
+
+        def wrapper(*a, **kw):
+            t0 = time.perf_counter()
+            try:
+                return orig(*a, **kw)
+            finally:
+                clock.totals[stage] = clock.totals.get(stage, 0.0) + time.perf_counter() - t0
+
+        setattr(obj, attr, wrapper)
+
+    def wrap_class(self, cls: type, attr: str, stage: str):
+        """类级包装，返回原始描述符（调用方在 finally 中 setattr 还原）。
+
+        ``staticmethod`` 属性必须以 ``staticmethod(wrapper)`` 回设——直接
+        setattr 裸函数会把静态方法降级成实例方法（self 会混入第一个参数）。
+        """
+        orig = cls.__dict__[attr]  # raw descriptor（保留 staticmethod 语义）
+        target = orig.__func__ if isinstance(orig, staticmethod) else orig
+        clock = self
+
+        def wrapper(*a, **kw):
+            t0 = time.perf_counter()
+            try:
+                return target(*a, **kw)
+            finally:
+                clock.totals[stage] = clock.totals.get(stage, 0.0) + time.perf_counter() - t0
+
+        setattr(
+            cls,
+            attr,
+            staticmethod(wrapper) if isinstance(orig, staticmethod) else wrapper,
+        )
+        return orig
+
+
+def _run_engine_loop_stage(prices: pl.DataFrame, start: date, end: date) -> dict:
+    """跑完整 ``engine.run()`` 并分项计时（P6：T0 引擎循环盲区覆盖）。
+
+    阶段口径：
+    - ``tradability_s``：``_build_tradability_today``（含 P1 向量化路径）
+    - ``signal_s``：策略 ``generate_signals``（ctx 构建后的信号生成）
+    - ``fill_s``：``AShareFillSimulator.simulate``（引擎内撮合段）
+    - ``persist_s``：结果持久化代理（fills/positions/returns 写入内存
+      DuckDB——生产 runner 持久化路径的等价 DataFrame→Arrow→DuckDB 写）
+    - ``other_s``：循环墙钟 - 上述各段（权重装配/风控/NAV 估算等）
+
+    返回的 dict 并入维度级报告的 ``engine_loop`` 键。
+    """
+    strategy = _BenchTopNStrategy(TOP_N)
+    spec = BacktestSpec(
+        strategy=strategy,
+        prices=prices,
+        start_date=start,
+        end_date=end,
+        initial_cash=INITIAL_CASH,
+    )
+    engine = VectorBacktestEngine()
+    clock = _StageClock()
+
+    # 类级补丁作用于进程内全局——保留原属性引用，finally 中还原。
+    orig_tradability = clock.wrap_class(
+        VectorBacktestEngine, "_build_tradability_today", "tradability"
+    )
+    orig_simulate = clock.wrap_class(AShareFillSimulator, "simulate", "fill")
+    clock.wrap_instance(strategy, "generate_signals", "signal")
+    try:
+        t0 = time.perf_counter()
+        result = engine.run(spec)
+        loop_wall = time.perf_counter() - t0
+    finally:
+        setattr(VectorBacktestEngine, "_build_tradability_today", orig_tradability)
+        setattr(AShareFillSimulator, "simulate", orig_simulate)
+
+    # 持久化代理：生产 runner 的 DataFrame→Arrow→DuckDB 写路径等价实现
+    t0 = time.perf_counter()
+    persist_con = duckdb.connect(database=":memory:")
+    for name, df in (
+        ("fills", result.fills),
+        ("positions", result.positions),
+        ("portfolio_returns", result.portfolio_returns),
+    ):
+        if df is not None and not df.is_empty():
+            persist_con.register(f"_{name}_view", df.to_arrow())
+            persist_con.execute(f"CREATE TABLE bench_{name} AS SELECT * FROM _{name}_view")
+            persist_con.unregister(f"_{name}_view")
+    summary = result.to_summary_dict()
+    persist_con.close()
+    persist_s = time.perf_counter() - t0
+
+    t = clock.totals
+    fill_s = t.get("fill", 0.0)
+    other_s = max(
+        loop_wall - t.get("tradability", 0.0) - t.get("signal", 0.0) - fill_s,
+        0.0,
+    )
+    return {
+        "wall_s": round(loop_wall, 4),
+        "tradability_s": round(t.get("tradability", 0.0), 4),
+        "signal_s": round(t.get("signal", 0.0), 4),
+        "fill_s": round(fill_s, 4),
+        "persist_s": round(persist_s, 4),
+        "other_s": round(other_s, 4),
+        "n_rebalances": len(result.rebalance_dates),
+        "n_fills": len(result.fills) if not result.fills.is_empty() else 0,
+        "total_return": summary.get("total_return"),
+    }
+
+
+def benchmark(
+    universe_size: int,
+    n_days: int,
+    seed: int = 42,
+    engine_loop: bool | None = None,
+) -> dict:
     """对一个 (universe_size × n_days) 维度运行基准，返回指标字典。"""
     rng = np.random.default_rng(seed)
 
@@ -281,9 +472,21 @@ def benchmark(universe_size: int, n_days: int, seed: int = 42) -> dict:
     )
     fill_time = time.perf_counter() - t0
 
+    # wall/peak 口径保持与 T0 基线系列一致（data_gen→load→pivot→fill），
+    # 引擎循环阶段在墙钟之外单独计时——否则六维 wall 序列不可比。
     run_time = time.perf_counter() - run_start
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+
+    # ── 阶段 4：引擎逐日循环（P6——T0 盲区永久覆盖）
+    #    完整 engine.run()：tradability / 信号 / 撮合 / 持久化分项计时。
+    #    超过 ENGINE_LOOP_MAX_ROWS 的维度默认跳过（显式标记，不静默）。
+    if engine_loop is None:
+        engine_loop = n_rows <= ENGINE_LOOP_MAX_ROWS
+    if engine_loop:
+        engine_loop_metrics: dict | None = _run_engine_loop_stage(prices, start_date, end_date)
+    else:
+        engine_loop_metrics = {"skipped": True, "reason": f"n_price_rows={n_rows} > ENGINE_LOOP_MAX_ROWS={ENGINE_LOOP_MAX_ROWS}"}
 
     # 价格矩阵列数 = universe + 1（trade_date）；行数 = 交易日数
     matrix_rows = price_matrix.height
@@ -291,6 +494,10 @@ def benchmark(universe_size: int, n_days: int, seed: int = 42) -> dict:
     n_fills = len(fills_df) if not fills_df.is_empty() else 0
 
     con.close()
+
+    # fill 段占关键路径占比（P6 门禁口径之一；关键路径 = wall - 合成数据生成）
+    critical_path_s = max(run_time - data_gen_time, 1e-9)
+    fill_share_pct = round(100.0 * fill_time / critical_path_s, 2)
 
     return {
         "universe_size": universe_size,
@@ -304,6 +511,8 @@ def benchmark(universe_size: int, n_days: int, seed: int = 42) -> dict:
             "pivot_s": round(pivot_time, 4),
             "fill_simulate_s": round(fill_time, 4),
         },
+        "fill_share_of_critical_path_pct": fill_share_pct,
+        "engine_loop": engine_loop_metrics,
         "duckdb_query_time_s": round(duckdb_load_time, 4),
         "price_matrix_shape": [matrix_rows, matrix_cols],
         "n_fills": n_fills,
@@ -375,6 +584,39 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="启用 DEBUG 日志。",
     )
+    parser.add_argument(
+        "--engine-loop-dims",
+        nargs="+",
+        metavar="UxD",
+        help=(
+            "强制在这些维度跑引擎循环阶段（覆盖 ENGINE_LOOP_MAX_ROWS 上限）。"
+            " 如 '--engine-loop-dims 5000x500'。"
+        ),
+    )
+    parser.add_argument(
+        "--no-engine-loop",
+        action="store_true",
+        help="跳过引擎循环阶段（只测 load/pivot/fill 三段）。",
+    )
+    parser.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help=(
+            "显式基线 JSON（默认：configs/benchmarks/baseline/backtest_det.json"
+            " canonical 锚点，缺失时回退 artifacts/benchmarks/ 最新 *_det.json）。"
+        ),
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD_PCT,
+        help=f"wall 回归拦截阈值百分比（默认 {DEFAULT_THRESHOLD_PCT:.0f}）。",
+    )
+    parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="只测量不做回归判定（exit 恒 0）。",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -384,21 +626,54 @@ def main(argv: list[str] | None = None) -> int:
 
     dims = _parse_dims(args.dims) if args.dims else list(DEFAULT_DIMS)
 
+    # 门禁基线在运行前解析（避免把本次输出误当基线）
+    baseline_path = None
+    if not args.no_gate:
+        try:
+            baseline_path = find_baseline("backtest", args.baseline)
+        except FileNotFoundError as exc:
+            print(f"[GATE] {exc}")
+            return 1
+
     print(f"运行基准：{len(dims)} 个维度 (top_n={TOP_N}, seed={args.seed})")
+    force_el_dims = (
+        set(_parse_dims(args.engine_loop_dims)) if args.engine_loop_dims else set()
+    )
     results: list[dict] = []
     for universe_size, n_days in dims:
         label = f"{universe_size}x{n_days}"
         print(f"  → {label} ...", flush=True)
-        res = benchmark(universe_size, n_days, seed=args.seed)
+        if args.no_engine_loop:
+            el_flag = False
+        elif (universe_size, n_days) in force_el_dims:
+            el_flag = True
+        else:
+            el_flag = None  # 按 ENGINE_LOOP_MAX_ROWS 自动
+        res = benchmark(universe_size, n_days, seed=args.seed, engine_loop=el_flag)
         results.append(res)
-        print(
-            f"      wall={res['wall_time_s']:.3f}s "
-            f"peak_mem={res['peak_memory_mb']:.1f}MB "
-            f"load={res['stages']['duckdb_load_s']:.3f}s "
-            f"pivot={res['stages']['pivot_s']:.3f}s "
-            f"fill={res['stages']['fill_simulate_s']:.3f}s "
-            f"({res['n_fills']} fills)"
-        )
+        el = res["engine_loop"]
+        if el.get("skipped"):
+            print(
+                f"      wall={res['wall_time_s']:.3f}s "
+                f"peak_mem={res['peak_memory_mb']:.1f}MB "
+                f"load={res['stages']['duckdb_load_s']:.3f}s "
+                f"pivot={res['stages']['pivot_s']:.3f}s "
+                f"fill={res['stages']['fill_simulate_s']:.3f}s "
+                f"({res['n_fills']} fills) | engine_loop: SKIPPED"
+            )
+        else:
+            print(
+                f"      wall={res['wall_time_s']:.3f}s "
+                f"peak_mem={res['peak_memory_mb']:.1f}MB "
+                f"load={res['stages']['duckdb_load_s']:.3f}s "
+                f"pivot={res['stages']['pivot_s']:.3f}s "
+                f"fill={res['stages']['fill_simulate_s']:.3f}s "
+                f"({res['n_fills']} fills) | "
+                f"engine_loop: wall={el['wall_s']:.3f}s "
+                f"trad={el['tradability_s']:.3f}s sig={el['signal_s']:.3f}s "
+                f"fill={el['fill_s']:.3f}s persist={el['persist_s']:.3f}s "
+                f"other={el['other_s']:.3f}s"
+            )
 
     _print_table(results)
 
@@ -418,7 +693,37 @@ def main(argv: list[str] | None = None) -> int:
     out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"JSON 报告已写入：{out_path}")
 
-    return 0
+    # ── 防回归门禁（P6）：wall（维度级 + engine_loop 级）对照 det 基线
+    if args.no_gate:
+        print("[GATE] --no-gate：跳过回归判定。")
+        return 0
+
+    if baseline_path is None:
+        print_gate_report(True, [], None, args.threshold)
+        return 0
+
+    baseline = load_baseline(baseline_path)
+    baseline_results = baseline.get("results", [])
+
+    def _dim_key(e: dict) -> tuple:
+        return (e["universe_size"], e["n_days"])
+
+    # 1) 维度级 wall（T0 以来口径——对照 det 基线六维数字）
+    passed_dim, msgs_dim = evaluate_wall_gate(
+        results, baseline_results, _dim_key,
+        lambda e: e["wall_time_s"], args.threshold,
+    )
+    # 2) 引擎循环 wall（P6 新口径；旧基线无 engine_loop 键 → 自动跳过）
+    passed_el, msgs_el = evaluate_wall_gate(
+        results, baseline_results, _dim_key,
+        lambda e: e["engine_loop"]["wall_s"], args.threshold,
+    )
+
+    print("\n[维度级 wall 门禁]")
+    print_gate_report(passed_dim, msgs_dim, baseline_path, args.threshold)
+    print("\n[引擎循环 wall 门禁]")
+    print_gate_report(passed_el, msgs_el, baseline_path, args.threshold)
+    return 0 if (passed_dim and passed_el) else 1
 
 
 if __name__ == "__main__":

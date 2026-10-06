@@ -9,6 +9,7 @@
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-10-06 | 性能批 P0-P6 | 回测性能优化收官：FillSimulator 5000×500 wall 436.5s→21.0s（-95%）、回测六维最大维 wall 186.0s→29.5s（-84%，峰值内存 2419MB→404MB）；基准补引擎循环分项计时（tradability/信号/撮合/持久化）+ wall>30% 防回归门禁（perf-gate CI + nightly，canonical 基线 `configs/benchmarks/baseline/`） |
 | 2026-05-11 | Phase 1 Step 1 | 环境初始化：environment.yml、pyproject.toml、CI、configs、scripts、目录骨架 |
 | 2026-05-11 | 初始生成 | 自动扫描空目录，生成文档骨架 |
 | 2026-05-17 | Phase A | TDX 数据集成：TdxDuckDBConnector、批量摄取、silver 层数据（6,675 股票，3M+ 行） |

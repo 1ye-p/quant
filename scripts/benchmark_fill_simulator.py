@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""FillSimulator 专项基准——cProfile 分段计时，用于 Phase 0 瓶颈确认门控。
+"""FillSimulator 专项基准——cProfile 分段计时 + wall 防回归门禁（P6 口径）。
 
-测量 ``AShareFillSimulator.simulate`` 的内部各方法耗时占比，重点回答：
-``_get_price``（dict 价格查找）是否构成回测瓶颈？
+测量 ``AShareFillSimulator.simulate`` 的内部各方法耗时占比（调用层级见
+``_METHODS_OF_INTEREST``），并报告 fill 段占关键路径的占比。
 
-报告的方法分层（按调用层级）：
-- ``_build_price_lookup``：一次性预处理（建 (td, aid) -> price dict）
-- ``_get_price``：(td, asset_id) -> field 的 dict 查找，最内层热点
-- ``_calculate_nav``：每日快照与下单前的 NAV 计算（内部循环 _get_price）
-- ``_execute_sell`` / ``_execute_buy``：撮合（含 cost_model / volume constraint）
-- ``_calculate_sell_qty`` / ``_calculate_buy_qty``：下单数量计算（含可交易性校验）
-- ``simulate``：顶层主循环（含所有子方法）
-
-门控规则
---------
-- ``_get_price`` 占总耗时 > 30%  →  数组化收益确认，进入 Phase 1
-- FillSimulator 非主瓶颈 或 总耗时 < 5min  →  项目终止（YAGNI）
+门控口径（P6 起——Phase 0 的 ``_get_price`` 占比/YAGNI 终止口径已废弃）：
+1. fill 段占关键路径占比：``simulate_wall_s / (simulate_wall_s + data_gen_s)``
+   以及 ``benchmark_backtest.py`` 侧的
+   ``fill_share_of_critical_path_pct``（fill / (wall - data_gen)）。
+2. wall 回归判定：``simulate_wall_s`` 对照基线 JSON（发现顺序：仓库
+   canonical ``configs/benchmarks/baseline/fill_det.json`` →
+   ``artifacts/benchmarks/`` 最新 ``*_fill.json``，见 ``bench_common.py``）；
+   同参数组合（universe, days, top_n）回归 > 阈值（默认 30%）→ exit 1。
 
 设计说明
 --------
@@ -54,6 +50,7 @@ import time
 import tracemalloc
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -66,6 +63,16 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(_repo_root / "python"))
 
 from cquant.backtest_vector.fill_simulator import AShareFillSimulator  # noqa: E402
+
+# 当作为仓库脚本运行时，scripts/ 下的共用模块可直接导入。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_common import (  # noqa: E402
+    DEFAULT_THRESHOLD_PCT,
+    evaluate_wall_gate,
+    find_baseline,
+    load_baseline,
+    print_gate_report,
+)
 
 logger = logging.getLogger("benchmark_fill_simulator")
 
@@ -305,33 +312,24 @@ def _print_breakdown(r: dict) -> None:
     print()
 
 
-def _gating_decision(r: dict) -> str:
-    """根据 _get_price 占比与总耗时做出门控决策。"""
-    get_price = r["methods"].get("_get_price", {})
-    pct = get_price.get("tottime_pct", 0.0)
-    wall = r["simulate_wall_s"]
+def _fill_share_report(r: dict) -> str:
+    """fill 段占关键路径占比（P6 门禁口径之一——纯报告，不拦截）。
 
-    if pct > 30.0:
-        return (
-            f"DECISION: PROCEED TO PHASE 1 (数组化). "
-            f"_get_price 占 {pct:.2f}% > 30% 阈值，数组化收益确认。"
-        )
-    if wall < 300.0:
-        return (
-            f"DECISION: YAGNI TERMINATE (项目终止). "
-            f"_get_price 占 {pct:.2f}% (<=30%)，simulate 总耗时 {wall:.1f}s < 5min；"
-            f"FillSimulator 非主瓶颈，无需数组化优化。"
-        )
+    分母 = simulate_wall + data_gen（本脚本自身的完整关键路径）；
+    回测侧口径（fill / (wall - data_gen)）见 benchmark_backtest.py 的
+    ``fill_share_of_critical_path_pct``。
+    """
+    total = r["simulate_wall_s"] + r["data_gen_s"]
+    share = 100.0 * r["simulate_wall_s"] / total if total > 0 else 0.0
     return (
-        f"DECISION: INCONCLUSIVE. "
-        f"_get_price 占 {pct:.2f}% (<=30%) 但 simulate 总耗时 {wall:.1f}s >= 5min；"
-        f"瓶颈在 _get_price 之外（撮合/可交易性校验/NAV 循环），需进一步分析。"
+        f"FILL SHARE: simulate 占本脚本关键路径 {share:.2f}% "
+        f"({r['simulate_wall_s']:.3f}s / {total:.3f}s)"
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="FillSimulator 专项基准——cProfile 分段计时（Phase 0 瓶颈确认）。",
+        description="FillSimulator 专项基准——cProfile 分段计时 + wall 防回归门禁（P6 口径）。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例：\n"
@@ -352,6 +350,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--seed", type=int, default=42, help="合成数据 RNG 种子（默认 42）。")
     parser.add_argument("--out", metavar="PATH", help="将完整 JSON 报告写入该路径。")
+    parser.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help=(
+            "显式基线 JSON（默认：configs/benchmarks/baseline/fill_det.json"
+            " canonical 锚点，缺失时回退 artifacts/benchmarks/ 最新 *_fill.json）。"
+        ),
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD_PCT,
+        help=f"wall 回归拦截阈值百分比（默认 {DEFAULT_THRESHOLD_PCT:.0f}）。",
+    )
+    parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="只测量不做回归判定（exit 恒 0）。",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="启用 DEBUG 日志。")
     args = parser.parse_args(argv)
 
@@ -362,6 +379,15 @@ def main(argv: list[str] | None = None) -> int:
 
     top_n = args.top_n if args.top_n > 0 else max(10, args.universe // 20)
 
+    # 门禁基线在运行前解析
+    baseline_path = None
+    if not args.no_gate:
+        try:
+            baseline_path = find_baseline("fill", args.baseline)
+        except FileNotFoundError as exc:
+            print(f"[GATE] {exc}")
+            return 1
+
     print(
         f"FillSimulator 基准：universe={args.universe}, days={args.days}, "
         f"top_n={top_n} (seed={args.seed})"
@@ -370,11 +396,11 @@ def main(argv: list[str] | None = None) -> int:
 
     result = benchmark(args.universe, args.days, top_n, seed=args.seed)
     _print_breakdown(result)
-    decision = _gating_decision(result)
-    print(f"  {decision}\n")
+    share_msg = _fill_share_report(result)
+    print(f"  {share_msg}\n")
 
     report = {
-        "description": "FillSimulator 专项基准（cProfile 分段计时，Phase 0 瓶颈确认）",
+        "description": "FillSimulator 专项基准（cProfile 分段计时 + wall 防回归门禁，P6 口径）",
         "params": {
             "universe": args.universe,
             "days": args.days,
@@ -382,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             "seed": args.seed,
         },
         "result": result,
-        "gating_decision": decision,
+        "fill_share": share_msg,
     }
     if args.out:
         from pathlib import Path
@@ -390,7 +416,30 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.out).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"JSON 报告已写入：{args.out}")
 
-    return 0
+    # ── wall 防回归门禁（P6）：simulate_wall_s 对照 det 基线（同参数组合）
+    if args.no_gate:
+        print("[GATE] --no-gate：跳过回归判定。")
+        return 0
+
+    if baseline_path is None:
+        print_gate_report(True, [], None, args.threshold)
+        return 0
+
+    baseline = load_baseline(baseline_path)
+    baseline_result = baseline.get("result") or {}
+
+    def _fill_key(e: dict) -> tuple:
+        return (e["universe_size"], e["n_days"], e["top_n"])
+
+    passed, msgs = evaluate_wall_gate(
+        [result],
+        [baseline_result] if baseline_result else [],
+        _fill_key,
+        lambda e: e["simulate_wall_s"],
+        args.threshold,
+    )
+    print_gate_report(passed, msgs, baseline_path, args.threshold)
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

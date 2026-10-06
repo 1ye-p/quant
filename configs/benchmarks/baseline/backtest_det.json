@@ -1,0 +1,187 @@
+{
+  "description": "canonical det 基线（P6 重录：post_p2b 性能 + engine_loop 分项）。刷新方式：全量跑 benchmark_backtest.py 后覆盖本文件并提交。",
+  "top_n": 10,
+  "seed": 42,
+  "results": [
+    {
+      "universe_size": 1000,
+      "n_days": 250,
+      "n_price_rows": 250000,
+      "wall_time_s": 4.5611,
+      "peak_memory_mb": 64.25,
+      "stages": {
+        "data_gen_s": 3.6874,
+        "duckdb_load_s": 0.1136,
+        "pivot_s": 0.1703,
+        "fill_simulate_s": 0.545
+      },
+      "fill_share_of_critical_path_pct": 62.37,
+      "engine_loop": {
+        "wall_s": 6.0037,
+        "tradability_s": 2.9768,
+        "signal_s": 1.027,
+        "fill_s": 0.2438,
+        "persist_s": 0.0249,
+        "other_s": 1.7561,
+        "n_rebalances": 250,
+        "n_fills": 603,
+        "total_return": -0.05784235159485218
+      },
+      "duckdb_query_time_s": 0.1136,
+      "price_matrix_shape": [
+        250,
+        1001
+      ],
+      "n_fills": 603
+    },
+    {
+      "universe_size": 1000,
+      "n_days": 500,
+      "n_price_rows": 500000,
+      "wall_time_s": 4.799,
+      "peak_memory_mb": 80.81,
+      "stages": {
+        "data_gen_s": 3.1223,
+        "duckdb_load_s": 0.157,
+        "pivot_s": 0.3969,
+        "fill_simulate_s": 1.0838
+      },
+      "fill_share_of_critical_path_pct": 64.64,
+      "engine_loop": {
+        "wall_s": 15.9037,
+        "tradability_s": 7.8249,
+        "signal_s": 3.969,
+        "fill_s": 0.4724,
+        "persist_s": 0.0245,
+        "other_s": 3.6374,
+        "n_rebalances": 500,
+        "n_fills": 1250,
+        "total_return": 0.05861006439018679
+      },
+      "duckdb_query_time_s": 0.157,
+      "price_matrix_shape": [
+        500,
+        1001
+      ],
+      "n_fills": 1250
+    },
+    {
+      "universe_size": 3000,
+      "n_days": 250,
+      "n_price_rows": 750000,
+      "wall_time_s": 7.5018,
+      "peak_memory_mb": 121.28,
+      "stages": {
+        "data_gen_s": 4.8548,
+        "duckdb_load_s": 0.2168,
+        "pivot_s": 1.5973,
+        "fill_simulate_s": 0.7871
+      },
+      "fill_share_of_critical_path_pct": 29.74,
+      "engine_loop": {
+        "wall_s": 17.0977,
+        "tradability_s": 6.9149,
+        "signal_s": 3.7728,
+        "fill_s": 0.4726,
+        "persist_s": 0.0249,
+        "other_s": 5.9374,
+        "n_rebalances": 250,
+        "n_fills": 606,
+        "total_return": -0.04656152256874191
+      },
+      "duckdb_query_time_s": 0.2168,
+      "price_matrix_shape": [
+        250,
+        3001
+      ],
+      "n_fills": 606
+    },
+    {
+      "universe_size": 3000,
+      "n_days": 500,
+      "n_price_rows": 1500000,
+      "wall_time_s": 16.1169,
+      "peak_memory_mb": 242.21,
+      "stages": {
+        "data_gen_s": 9.8756,
+        "duckdb_load_s": 0.4231,
+        "pivot_s": 4.0337,
+        "fill_simulate_s": 1.6983
+      },
+      "fill_share_of_critical_path_pct": 27.21,
+      "engine_loop": {
+        "wall_s": 53.0154,
+        "tradability_s": 23.1717,
+        "signal_s": 15.2835,
+        "fill_s": 1.2471,
+        "persist_s": 0.0349,
+        "other_s": 13.313,
+        "n_rebalances": 500,
+        "n_fills": 1235,
+        "total_return": 0.17176981252810863
+      },
+      "duckdb_query_time_s": 0.4231,
+      "price_matrix_shape": [
+        500,
+        3001
+      ],
+      "n_fills": 1235
+    },
+    {
+      "universe_size": 5000,
+      "n_days": 250,
+      "n_price_rows": 1250000,
+      "wall_time_s": 16.7407,
+      "peak_memory_mb": 202.03,
+      "stages": {
+        "data_gen_s": 8.9241,
+        "duckdb_load_s": 0.3955,
+        "pivot_s": 6.0577,
+        "fill_simulate_s": 1.2925
+      },
+      "fill_share_of_critical_path_pct": 16.54,
+      "engine_loop": {
+        "wall_s": 30.5697,
+        "tradability_s": 11.786,
+        "signal_s": 6.2235,
+        "fill_s": 0.8686,
+        "persist_s": 0.0297,
+        "other_s": 11.6918,
+        "n_rebalances": 250,
+        "n_fills": 640,
+        "total_return": -0.0091478677976915
+      },
+      "duckdb_query_time_s": 0.3955,
+      "price_matrix_shape": [
+        250,
+        5001
+      ],
+      "n_fills": 640
+    },
+    {
+      "universe_size": 5000,
+      "n_days": 500,
+      "n_price_rows": 2500000,
+      "wall_time_s": 32.5892,
+      "peak_memory_mb": 403.55,
+      "stages": {
+        "data_gen_s": 16.8768,
+        "duckdb_load_s": 0.7113,
+        "pivot_s": 12.5162,
+        "fill_simulate_s": 2.3669
+      },
+      "fill_share_of_critical_path_pct": 15.06,
+      "engine_loop": {
+        "skipped": true,
+        "reason": "n_price_rows=2500000 > ENGINE_LOOP_MAX_ROWS=1500000"
+      },
+      "duckdb_query_time_s": 0.7113,
+      "price_matrix_shape": [
+        500,
+        5001
+      ],
+      "n_fills": 1198
+    }
+  ],
+  "baseline_anchor": "2026-10-06_post_p2b+P6_engine_loop"
+}

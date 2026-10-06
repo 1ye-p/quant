@@ -1,0 +1,55 @@
+name: Benchmark Nightly
+
+# P6 nightly 全量基准：六维 backtest 基准 + FillSimulator 专项，全部走
+# wall 防回归门禁（>30% 拦截）。产物 JSON 上传为 artifact——除审计外，
+# 也在需要时用于在同型 runner 上重录 configs/benchmarks/baseline/ 的
+# canonical 基线（跨机型 wall 对比可能失真，见 perf-gate.yml 注释）。
+
+on:
+  schedule:
+    # 每日 UTC 17:23（避开整点/半点高峰）
+    - cron: "23 17 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  nightly-benchmark:
+    name: Full benchmark + regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+          init-shell: bash
+
+      - name: Install package (editable)
+        shell: bash -el {0}
+        run: python -m pip install --no-deps -e .
+
+      - name: Backtest benchmark (full 6 dims)
+        shell: bash -el {0}
+        run: |
+          python scripts/benchmark_backtest.py --tag nightly_det
+
+      - name: FillSimulator benchmark (full)
+        shell: bash -el {0}
+        run: |
+          python scripts/benchmark_fill_simulator.py \
+            --universe 5000 --days 500 --top-n 250 \
+            --out artifacts/benchmarks/nightly_fill.json
+
+      - name: Upload benchmark reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-bench-${{ github.run_id }}
+          path: |
+            artifacts/benchmarks/*.json
+          if-no-files-found: ignore
+          retention-days: 30

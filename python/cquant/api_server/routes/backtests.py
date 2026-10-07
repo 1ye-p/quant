@@ -340,6 +340,21 @@ def _resolve_request_universe(
     return resolved
 
 
+def _build_universe_tags(resolved: str, dsl_spec: dict | None) -> dict[str, str]:
+    """F1: universe 留痕 tags（回测可复现性——只加可见性，不改优先级语义）。
+
+    - ``universe_resolved``：无条件记录实际生效的股票池（与 DSL 一致、
+      非 DSL、纯 body 覆盖均记——回测结果可复现的前提）；
+    - ``universe_override``：仅当 dsl_spec 声明了非 "all" 的 universe 且
+      实际解析结果与之不同时记录，形如 ``"{dsl}->{resolved}"``。
+    """
+    tags = {"universe_resolved": resolved}
+    dsl_universe = (dsl_spec or {}).get("universe", "all")
+    if dsl_spec and dsl_universe != "all" and resolved != dsl_universe:
+        tags["universe_override"] = f"{dsl_universe}->{resolved}"
+    return tags
+
+
 def _validate_factor_weights(
     factor_weights: dict[str, float] | None,
     factors: list[str],
@@ -667,7 +682,11 @@ async def create_backtest(
         feature_set_version=feature_set_version,
         top_n=top_n,
         sort_factor=sort_factor,
-        tags={**parsed.get("risk_limits", {}), "rebalance_frequency": body.rebalance_frequency},
+        tags={
+            **parsed.get("risk_limits", {}),
+            "rebalance_frequency": body.rebalance_frequency,
+            **_build_universe_tags(universe_id, dsl_spec),
+        },
         strategy_type=strategy_type,
         model_version=model_version,
         label_name=label_name,

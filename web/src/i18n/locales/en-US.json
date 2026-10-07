@@ -1196,7 +1196,8 @@
         "legacy_full_1mo": "~1-2min"
       },
       "warning": {
-        "slow_combo": "Slowest combo: full market × daily rebalance. New users are advised to try \"CSI 300 + weekly\" first — much faster."
+        "slow_combo": "Slowest combo: full market × daily rebalance. New users are advised to try \"CSI 300 + weekly\" first — much faster.",
+        "universe_override": "Strategy universe is \"{{dsl}}\" but current selection is \"{{current}}\": the backtest runs on the current selection (recorded as universe_override)."
       }
     },
     "backtests": {

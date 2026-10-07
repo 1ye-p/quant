@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { backtestsApi, datasetsApi, mlApi } from '@/lib/api'
@@ -100,15 +100,23 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
   const factors: string[] = parsed.factors ?? ['ret_20d']
   const defaultTopN = parsed.top_n ?? 10
 
+  // F1: DSL 策略声明的股票池（dsl_spec.universe）——初始化最高优先级，
+  // 但需在选项表加载后校验：不在选项表中时静默落下一级（不 crash）。
+  const dslSpecRecord = (parsed as Record<string, unknown>).dsl_spec as Record<string, unknown> | undefined
+  const dslUniverse = typeof dslSpecRecord?.universe === 'string' ? dslSpecRecord.universe : undefined
+  const configUniverseId = (parsed as Record<string, unknown>).universe_id as string | undefined
+
   const [startDate, setStartDate] = useState('2025-01-01')
   const [endDate, setEndDate] = useState('2025-06-30')
   const [topN, setTopN] = useState(String(defaultTopN))
   const [sortFactor, setSortFactor] = useState(factors[0])
   const [datasetVersion, setDatasetVersion] = useState('')
-  // P4 默认优先级：策略自身配置 > 老用户 localStorage 记忆 > 安全默认（HS300+1w）
+  // F1/P4 默认优先级：DSL dsl_spec.universe > 策略顶层 universe_id >
+  // 老用户 localStorage 记忆 > 安全默认（HS300+1w）
   const storedDefaults = useMemo(readStoredDefaults, [])
   const [universeId, setUniverseId] = useState(
-    (parsed as Record<string, unknown>).universe_id as string
+    dslUniverse
+    ?? configUniverseId
     ?? storedDefaults.universe_id
     ?? SAFE_DEFAULT_UNIVERSE
   )
@@ -167,6 +175,23 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
     queryFn: datasetsApi.universes,
     staleTime: 300_000,
   })
+
+  // F1: dsl_spec.universe 不在选项表时（如后端预设未暴露给前端），静默落
+  // 下一级优先级（配置顶层 > localStorage > 安全默认）。仅在初次加载选项
+  // 表后校正一次，且只在校正值仍等于初始 dsl 值时才改——不覆盖用户已改选。
+  const universeInitCorrected = useRef(false)
+  useEffect(() => {
+    if (universeInitCorrected.current || !universes?.predefined) return
+    universeInitCorrected.current = true
+    const available = new Set(universes.predefined.map(u => u.id))
+    if (dslUniverse && !available.has(dslUniverse)) {
+      setUniverseId(configUniverseId ?? storedDefaults.universe_id ?? SAFE_DEFAULT_UNIVERSE)
+    }
+  }, [universes, dslUniverse, configUniverseId, storedDefaults.universe_id])
+
+  // F1: 覆盖提示用的显示名（选项表 name，缺失时退回裸 id）
+  const universeDisplayName = (id: string): string =>
+    universes?.predefined.find(u => u.id === id)?.name ?? id
 
   const { data: mlExperiments } = useQuery({
     queryKey: ['ml', 'experiments', 'completed'],
@@ -315,6 +340,19 @@ export function BacktestRunModal({ strategyId, configText, onClose }: BacktestRu
               <option value="custom">{t('component.backtest_run_modal.option.custom_pool')}</option>
             </select>
           </div>
+          {/* F1: DSL 策略股票池被改选时的 amber 覆盖提示（改回一致即消失） */}
+          {(() => {
+            const dslMismatch = dslUniverse && dslUniverse !== 'all' && universeId !== dslUniverse
+            if (!dslMismatch) return null
+            return (
+              <p className="text-xs text-amber-600" data-testid="universe-override-hint">
+                ⚠ {t('component.backtest_run_modal.warning.universe_override', {
+                  dsl: universeDisplayName(dslUniverse),
+                  current: universeDisplayName(universeId),
+                })}
+              </p>
+            )
+          })()}
           {universeId === 'custom' && (
             <div>
               <label className="block text-sm text-gray-600 mb-1">{t('component.backtest_run_modal.label.custom_assets')}</label>

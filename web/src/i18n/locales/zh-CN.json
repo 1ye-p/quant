@@ -1196,7 +1196,8 @@
         "legacy_full_1mo": "约 1-2 分钟"
       },
       "warning": {
-        "slow_combo": "最慢组合：全市场 × 日频调仓。建议新用户先试「沪深300 + 每周」组合，速度快得多。"
+        "slow_combo": "最慢组合：全市场 × 日频调仓。建议新用户先试「沪深300 + 每周」组合，速度快得多。",
+        "universe_override": "策略定义的股票池为「{{dsl}}」，当前已改选「{{current}}」：回测将按当前选择执行，并记录 universe_override 留痕。"
       }
     },
     "backtests": {

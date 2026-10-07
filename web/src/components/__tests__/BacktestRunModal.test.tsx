@@ -192,6 +192,90 @@ describe('BacktestRunModal safe defaults + tiered estimates (P4)', () => {
   })
 })
 
+describe('BacktestRunModal DSL universe init + override hint (F1)', () => {
+  const ZZ500_DSL_CONFIG = JSON.stringify({
+    strategy_type: 'DSL',
+    dsl_spec: {
+      name: 'dsl_zz500',
+      universe: 'idx_zz500',
+      score: [{ factor: 'mom', weight: 1.0 }],
+      position: { method: 'equal_weight' },
+    },
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    mockedCreate.mockResolvedValue({
+      job_id: 'job_1',
+      strategy_id: 'strat_1',
+      status: 'running',
+    } as never)
+  })
+
+  it('DSL strategy opens with dsl_spec.universe selected and sends it in the payload', async () => {
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText={ZZ500_DSL_CONFIG} onClose={() => {}} />,
+    )
+    const poolSelect = await screen.findByTestId('universe-select') as HTMLSelectElement
+    await waitFor(() => expect(poolSelect.value).toBe('idx_zz500'))
+
+    const runBtn = await screen.findByRole('button', { name: '执行回测' })
+    await waitFor(() => expect((runBtn as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(runBtn)
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1))
+    const body = mockedCreate.mock.calls[0][0] as Record<string, unknown>
+    expect(body.universe_id).toBe('idx_zz500')
+    // 初始一致 → 无覆盖提示
+    expect(screen.queryByTestId('universe-override-hint')).not.toBeInTheDocument()
+  })
+
+  it('DSL universe beats localStorage memory and strategy top-level universe_id', async () => {
+    localStorage.setItem(
+      'cquant_run_modal_defaults',
+      JSON.stringify({ universe_id: 'idx_hs300' }),
+    )
+    const config = JSON.stringify({
+      ...JSON.parse(ZZ500_DSL_CONFIG),
+      universe_id: 'all',
+    })
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText={config} onClose={() => {}} />,
+    )
+    const poolSelect = await screen.findByTestId('universe-select') as HTMLSelectElement
+    await waitFor(() => expect(poolSelect.value).toBe('idx_zz500'))
+  })
+
+  it('shows amber override hint when user changes away from dsl universe, clears when changed back', async () => {
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText={ZZ500_DSL_CONFIG} onClose={() => {}} />,
+    )
+    const poolSelect = await screen.findByTestId('universe-select') as HTMLSelectElement
+    await waitFor(() => expect(poolSelect.value).toBe('idx_zz500'))
+    expect(screen.queryByTestId('universe-override-hint')).not.toBeInTheDocument()
+
+    // 改选沪深300 → amber 提示出现，双值可见（中证500 → 沪深300）
+    fireEvent.change(poolSelect, { target: { value: 'idx_hs300' } })
+    const hint = await screen.findByTestId('universe-override-hint')
+    expect(hint.textContent).toContain('中证500')
+    expect(hint.textContent).toContain('沪深300')
+
+    // 改回一致 → 提示消失
+    fireEvent.change(screen.getByTestId('universe-select'), { target: { value: 'idx_zz500' } })
+    await waitFor(() => expect(screen.queryByTestId('universe-override-hint')).not.toBeInTheDocument())
+  })
+
+  it('non-DSL config keeps P4 default chain unchanged and never shows the hint', async () => {
+    renderWithProviders(
+      <BacktestRunModal strategyId="strat_1" configText='{"factors":["ret_20d"],"top_n":10}' onClose={() => {}} />,
+    )
+    const poolSelect = await screen.findByTestId('universe-select') as HTMLSelectElement
+    await waitFor(() => expect(poolSelect.value).toBe('idx_hs300'))
+    fireEvent.change(poolSelect, { target: { value: 'idx_zz500' } })
+    expect(screen.queryByTestId('universe-override-hint')).not.toBeInTheDocument()
+  })
+})
+
 describe('BacktestRunModal precheck warnings (P3-7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

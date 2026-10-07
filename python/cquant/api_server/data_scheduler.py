@@ -3,10 +3,17 @@ from __future__ import annotations
 from cquant.core.errors import IngestError
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
+from cquant.scheduler.scheduler_lock import acquire_scheduler_lock, lock_path_from_env
+
 logger = logging.getLogger(__name__)
+
+# F3: single-instance lock — shared with the CLI host (scheduler/data_scheduler).
+_SCHEDULER_LOCK_PATH = lock_path_from_env()
 
 _SCHEDULER_STATE: dict[str, Any] = {
     "enabled": True,
@@ -174,8 +181,42 @@ def run_ext_indicator_refresh_job(catalog) -> None:
     run_external_indicator_refresh(catalog, trigger="scheduled")
 
 
+def run_catalog_backup_job(catalog) -> None:
+    """Catalog backup job (03:40) — delegates to the pure backup pipeline."""
+    from cquant.scheduler.catalog_backup import run_catalog_backup
+
+    result = run_catalog_backup(catalog)
+    if "error" in result:
+        logger.error("Catalog backup failed: %s", result["error"])
+    else:
+        logger.info(
+            "Catalog backup ok: %s (%.1f MB)",
+            result["path"], result["size"] / 1e6,
+        )
+
+
 def start_data_scheduler(catalog) -> Any:
     """启动 APScheduler，注册每日 16:35 的摄取任务与 18:15 的外部指标刷新任务。"""
+    # F3: escape hatch — keep this host's scheduler off entirely.
+    if os.environ.get("CQUANT_DISABLE_API_SCHEDULER") == "1":
+        logger.info(
+            "CQUANT_DISABLE_API_SCHEDULER=1 — api-host scheduler disabled; "
+            "scheduled jobs are owned by the CLI host"
+        )
+        return None
+
+    # F3: single-instance lock — exactly one scheduler host runs the jobs.
+    lock_fd = acquire_scheduler_lock(_SCHEDULER_LOCK_PATH)
+    if lock_fd is None:
+        logger.warning(
+            "Scheduler lock held by another host (%s) — this api host will NOT "
+            "register scheduled jobs. Jobs NOT running on this host: %s. "
+            "The API itself continues to serve normally.",
+            _SCHEDULER_LOCK_PATH,
+            "daily_ingest, ext_indicator_refresh, catalog_backup",
+        )
+        return None
+
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -196,6 +237,14 @@ def start_data_scheduler(catalog) -> Any:
         run_ext_indicator_refresh_job,
         CronTrigger(hour=18, minute=15, timezone="Asia/Shanghai"),
         id="ext_indicator_refresh",
+        args=[catalog],
+        replace_existing=True,
+    )
+    # Catalog backup — daily at 03:40 (off-peak, clear of gold_cleanup 03:00)
+    scheduler.add_job(
+        run_catalog_backup_job,
+        CronTrigger(hour=3, minute=40, timezone="Asia/Shanghai"),
+        id="catalog_backup",
         args=[catalog],
         replace_existing=True,
     )

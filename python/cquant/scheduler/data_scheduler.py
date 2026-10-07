@@ -22,7 +22,32 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from cquant.scheduler.scheduler_lock import acquire_scheduler_lock, lock_path_from_env
+
 logger = logging.getLogger(__name__)
+
+# F3: single-instance lock — shared with the api host (api_server/data_scheduler).
+_SCHEDULER_LOCK_PATH = lock_path_from_env()
+
+# Job ids registered by this host's start() — logged when the lock is lost so
+# operators see exactly which pipelines are (not) covered.
+_HOST_JOB_IDS = (
+    "price_ingest",
+    "fundamentals",
+    "valuation_daily",
+    "alerts",
+    "health",
+    "daily_prediction",
+    "weekly_retrain",
+    "gold_cleanup",
+    "strategy_optimization",
+    "ext_indicator_refresh",
+    "catalog_backup",
+)
+
+# Jobs only this host registers (the api host covers the ingest/refresh pair):
+# if this host yields the lock, these run nowhere.
+_HOST_EXCLUSIVE_JOBS = ("gold_cleanup", "weekly_retrain", "strategy_optimization")
 
 # ---------------------------------------------------------------------------
 # Retry helper
@@ -352,6 +377,15 @@ def _notify_needs_review(catalog: Any, strategy_ids: list[str]) -> None:
             logger.warning("Notification via %s failed: %s", ch.channel_type, exc)
 
 
+def _job_catalog_backup(catalog: Any) -> None:
+    """Backup the catalog (CHECKPOINT → copy → gzip → rotate). F3."""
+    from cquant.scheduler.catalog_backup import run_catalog_backup
+
+    result = run_catalog_backup(catalog)
+    if "error" in result:
+        raise RuntimeError(result["error"])
+
+
 def _job_ext_indicator_refresh(catalog: Any) -> None:
     """Refresh builtin external indicators via adapters (akshare/tushare)."""
     from cquant.datahub.pipelines.indicator_sources.refresh import (
@@ -421,6 +455,20 @@ class DataScheduler:
 
     def start(self) -> None:
         """Start the scheduler (blocking call)."""
+        # F3: single-instance lock — yield to the api host if it holds it.
+        lock_fd = acquire_scheduler_lock(_SCHEDULER_LOCK_PATH)
+        if lock_fd is None:
+            logger.warning(
+                "Scheduler lock held by another host (%s) — this host will NOT "
+                "run scheduled jobs. Jobs on this host that now run NOWHERE: %s. "
+                "Full job list not started here: %s.",
+                _SCHEDULER_LOCK_PATH,
+                ", ".join(_HOST_EXCLUSIVE_JOBS),
+                ", ".join(_HOST_JOB_IDS),
+            )
+            self._record_run("scheduler_lock", "skipped_lock_held")
+            return
+
         from apscheduler.schedulers.blocking import BlockingScheduler
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
@@ -516,6 +564,15 @@ class DataScheduler:
             CronTrigger(hour=18, minute=15, timezone=self._tz),
             id="ext_indicator_refresh",
             name="External Indicator Refresh",
+            replace_existing=True,
+        )
+
+        # 13. Catalog backup — daily at 03:40 (off-peak, clear of gold_cleanup 03:00)
+        sched.add_job(
+            self._run_catalog_backup,
+            CronTrigger(hour=3, minute=40, timezone=self._tz),
+            id="catalog_backup",
+            name="Catalog Backup",
             replace_existing=True,
         )
 
@@ -694,6 +751,15 @@ class DataScheduler:
         except Exception as exc:
             logger.error("Strategy optimization failed after retries: %s", exc)
             self._record_run("strategy_optimization", "failure")
+
+    def _run_catalog_backup(self) -> None:
+        logger.info("Running catalog backup ...")
+        try:
+            _with_retry(_job_catalog_backup, self._catalog, max_retries=2, base_delay=1.0)
+            self._record_run("catalog_backup")
+        except Exception as exc:
+            logger.error("Catalog backup failed after retries: %s", exc)
+            self._record_run("catalog_backup", "failure")
 
     def _run_ext_indicator_refresh(self) -> None:
         logger.info("Running external indicator refresh ...")

@@ -226,6 +226,244 @@ class TestApiServerSchedulerRegistration:
                 assert j.get("replace_existing") is True
 
 
+# ---------------------------------------------------------------------------
+# F3: single-instance lock + catalog backup wiring (both hosts)
+# ---------------------------------------------------------------------------
+
+
+def _fake_apscheduler(monkeypatch):
+    """Inject fake APScheduler modules; return collected jobs/triggers."""
+    import sys
+    import types
+
+    added_jobs: list[dict] = []
+    trigger_calls: list[dict] = []
+
+    class FakeAsyncIOScheduler:
+        def __init__(self, timezone=None):
+            self.timezone = timezone
+
+        def add_job(self, fn, trigger=None, **kwargs):
+            added_jobs.append({"fn": fn, "trigger": trigger, **kwargs})
+
+        def start(self):
+            return None
+
+        def get_job(self, job_id):
+            return None
+
+    class FakeCronTrigger:
+        def __init__(self, **kwargs):
+            trigger_calls.append(kwargs)
+
+    mods = {
+        "apscheduler": types.ModuleType("apscheduler"),
+        "apscheduler.schedulers": types.ModuleType("apscheduler.schedulers"),
+        "apscheduler.schedulers.asyncio": types.ModuleType(
+            "apscheduler.schedulers.asyncio"
+        ),
+        "apscheduler.triggers": types.ModuleType("apscheduler.triggers"),
+        "apscheduler.triggers.cron": types.ModuleType("apscheduler.triggers.cron"),
+    }
+    mods["apscheduler.schedulers.asyncio"].AsyncIOScheduler = FakeAsyncIOScheduler
+    mods["apscheduler.triggers.cron"].CronTrigger = FakeCronTrigger
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+    return added_jobs, trigger_calls
+
+
+class TestApiHostSchedulerLock:
+    def test_disable_env_skips_api_scheduler(self, monkeypatch, caplog):
+        added_jobs, _ = _fake_apscheduler(monkeypatch)
+        from cquant.api_server import data_scheduler as api_ds
+
+        monkeypatch.setattr(api_ds, "_SCHEDULER_INSTANCE", None)
+        monkeypatch.setenv("CQUANT_DISABLE_API_SCHEDULER", "1")
+
+        with caplog.at_level(logging.INFO):
+            result = api_ds.start_data_scheduler(MagicMock())
+
+        assert result is None
+        assert added_jobs == []
+        assert "CQUANT_DISABLE_API_SCHEDULER" in caplog.text
+
+    def test_lock_held_logs_unrun_job_list_and_returns_none(self, monkeypatch, caplog):
+        added_jobs, _ = _fake_apscheduler(monkeypatch)
+        from cquant.api_server import data_scheduler as api_ds
+
+        monkeypatch.setattr(api_ds, "_SCHEDULER_INSTANCE", None)
+        monkeypatch.delenv("CQUANT_DISABLE_API_SCHEDULER", raising=False)
+        # Simulate the other host holding the lock
+        monkeypatch.setattr(
+            "cquant.api_server.data_scheduler.acquire_scheduler_lock",
+            lambda *a, **kw: None,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = api_ds.start_data_scheduler(MagicMock())
+
+        assert result is None
+        assert added_jobs == []
+        assert "daily_ingest" in caplog.text
+        assert "ext_indicator_refresh" in caplog.text
+
+    def test_api_host_registers_catalog_backup_0340(self, monkeypatch):
+        added_jobs, trigger_calls = _fake_apscheduler(monkeypatch)
+        from cquant.api_server import data_scheduler as api_ds
+
+        monkeypatch.setattr(api_ds, "_SCHEDULER_INSTANCE", None)
+        monkeypatch.delenv("CQUANT_DISABLE_API_SCHEDULER", raising=False)
+        monkeypatch.setattr(
+            "cquant.api_server.data_scheduler.acquire_scheduler_lock",
+            lambda *a, **kw: 99,
+        )
+
+        api_ds.start_data_scheduler(MagicMock())
+
+        assert {"hour": 3, "minute": 40, "timezone": "Asia/Shanghai"} in trigger_calls
+        ids = [j.get("id") for j in added_jobs]
+        assert "catalog_backup" in ids
+
+
+class TestCliHostSchedulerLock:
+    def _fake_cli_scheduler_modules(self, monkeypatch):
+        """Fake blocking APScheduler for DataScheduler.start()."""
+        import sys
+        import types
+
+        added_jobs: list[dict] = []
+
+        class FakeBlockingScheduler:
+            def __init__(self, timezone=None):
+                self.timezone = timezone
+
+            def add_job(self, fn, trigger=None, **kwargs):
+                added_jobs.append({"fn": fn, "trigger": trigger, **kwargs})
+
+            def get_jobs(self):
+                return []
+
+            def start(self):
+                # never block in tests
+                raise KeyboardInterrupt()
+
+            def shutdown(self, wait=False):
+                pass
+
+        class FakeCronTrigger:
+            def __init__(self, **kwargs):
+                pass
+
+        mods = {
+            "apscheduler": types.ModuleType("apscheduler"),
+            "apscheduler.schedulers": types.ModuleType("apscheduler.schedulers"),
+            "apscheduler.schedulers.blocking": types.ModuleType(
+                "apscheduler.schedulers.blocking"
+            ),
+            "apscheduler.triggers": types.ModuleType("apscheduler.triggers"),
+            "apscheduler.triggers.cron": types.ModuleType("apscheduler.triggers.cron"),
+            "apscheduler.triggers.interval": types.ModuleType(
+                "apscheduler.triggers.interval"
+            ),
+        }
+        mods["apscheduler.schedulers.blocking"].BlockingScheduler = (
+            FakeBlockingScheduler
+        )
+        mods["apscheduler.triggers.cron"].CronTrigger = FakeCronTrigger
+        mods["apscheduler.triggers.interval"].IntervalTrigger = FakeCronTrigger
+        for name, mod in mods.items():
+            monkeypatch.setitem(sys.modules, name, mod)
+        return added_jobs
+
+    def test_cli_lock_held_lists_jobs_and_records_skip(
+        self, monkeypatch, caplog, tmp_path
+    ):
+        added_jobs = self._fake_cli_scheduler_modules(monkeypatch)
+        from cquant.scheduler import data_scheduler as cli_ds
+
+        monkeypatch.setattr(
+            "cquant.scheduler.data_scheduler.acquire_scheduler_lock",
+            lambda *a, **kw: None,
+        )
+
+        catalog = MagicMock()
+        sched = cli_ds.DataScheduler(catalog, timezone="Asia/Shanghai")
+        with caplog.at_level(logging.WARNING):
+            sched.start()
+
+        assert added_jobs == []
+        for job_id in ("gold_cleanup", "weekly_retrain", "strategy_optimization"):
+            assert job_id in caplog.text
+        runs = [
+            c.args[1]
+            for c in catalog.execute.call_args_list
+            if len(c.args) > 1 and isinstance(c.args[1], list)
+        ]
+        assert any(
+            r[0] == "scheduler_lock" and r[2] == "skipped_lock_held" for r in runs
+        )
+
+    def test_dual_host_single_runner_under_lock(self, monkeypatch, tmp_path):
+        """Simulated dual-host: api host takes the real flock; CLI host must skip."""
+        added_jobs = self._fake_cli_scheduler_modules(monkeypatch)
+        from cquant.api_server import data_scheduler as api_ds
+        from cquant.scheduler import data_scheduler as cli_ds
+        from cquant.scheduler.scheduler_lock import acquire_scheduler_lock
+
+        lock_path = tmp_path / "scheduler.lock"
+        _fake_apscheduler(monkeypatch)  # api host also needs fake APScheduler
+        monkeypatch.setattr(api_ds, "_SCHEDULER_INSTANCE", None)
+        monkeypatch.setattr(
+            api_ds, "_SCHEDULER_LOCK_PATH", lock_path, raising=False
+        )
+        monkeypatch.delenv("CQUANT_DISABLE_API_SCHEDULER", raising=False)
+
+        # api host acquires the real lock (real flock across both calls)
+        api_sched = api_ds.start_data_scheduler(MagicMock())
+        assert api_sched is not None
+
+        monkeypatch.setattr(
+            cli_ds, "_SCHEDULER_LOCK_PATH", lock_path, raising=False
+        )
+        catalog = MagicMock()
+        cli = cli_ds.DataScheduler(catalog, timezone="Asia/Shanghai")
+        cli.start()  # must skip, not raise
+        assert added_jobs == []
+
+    def test_cli_host_registers_catalog_backup_0340(self, monkeypatch):
+        added_jobs = self._fake_cli_scheduler_modules(monkeypatch)
+        from cquant.scheduler import data_scheduler as cli_ds
+
+        monkeypatch.setattr(
+            "cquant.scheduler.data_scheduler.acquire_scheduler_lock",
+            lambda *a, **kw: 42,
+        )
+        sched = cli_ds.DataScheduler(MagicMock(), timezone="Asia/Shanghai")
+        try:
+            sched.start()
+        except KeyboardInterrupt:
+            pass
+        ids = [j.get("id") for j in added_jobs]
+        assert "catalog_backup" in ids
+
+    def test_cli_catalog_backup_runner_records_run(self, monkeypatch):
+        from cquant.scheduler import data_scheduler as cli_ds
+
+        monkeypatch.setattr(
+            "cquant.scheduler.data_scheduler._job_catalog_backup",
+            lambda catalog: None,
+        )
+        catalog = MagicMock()
+        sched = cli_ds.DataScheduler(catalog)
+        sched._run_catalog_backup()
+        runs = [
+            c.args[1]
+            for c in catalog.execute.call_args_list
+            if len(c.args) > 1 and isinstance(c.args[1], list)
+        ]
+        assert any(r[0] == "catalog_backup" and r[2] == "success" for r in runs)
+
+
 class TestJobPriceIngest:
     def test_skips_when_up_to_date(self, caplog):
         from cquant.scheduler.data_scheduler import _job_price_ingest

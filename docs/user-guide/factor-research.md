@@ -159,8 +159,7 @@ corr(close, volume, 20)
 6. **查看半衰期**：是否符合策略周期；
 7. **查看 IC 衰减**：是否平滑单调；
 8. **查看分层收益**：是否单调、多空价差是否为正；
-9. **（可选）正交化**：与其他因子组合时去除共线性；
-10. **发送到打分**：点击「发送到打分」，进入 ScoringPage 进行多因子合成。
+9. **发送到打分**：点击「发送到打分」，进入 ScoringPage 进行多因子合成。
 
 ---
 
@@ -172,7 +171,16 @@ cQuant 支持因子 IC 告警：当因子的滚动 IC 跌破阈值（如 Mean IC
 
 ---
 
-## 6. 相关文档
+## 6. 已知过时文档
+
+上游 `vibe-trading` 的 `agent/src/skills/factor-research/SKILL.md`（:95-103）仍包含
+「Orthogonalized Combination」（Schmidt 正交化合成）章节。该路径已从 cQuant 后端
+移除——多因子合成统一使用 `CrossSectionScorer._neutralize_factors` 残差投影，
+按该章节操作会失败。详见 [KNOWN_ISSUES.md §3](../../KNOWN_ISSUES.md)。
+
+---
+
+## 7. 相关文档
 
 - [快速开始](getting-started.md)
 - [策略配置指南](strategy-config.md) — 多因子策略如何使用因子权重

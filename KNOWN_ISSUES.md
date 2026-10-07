@@ -16,3 +16,17 @@
 ## 2. 恢复演练记录
 
 - 2026-10-07：`artifacts/backups/drill-2026-10-07.md`（首次演练，F3）
+
+## 3. vibe-trading factor-research SKILL.md「Orthogonalized Combination」章节过时（F5）
+
+- **现状**：`lib/vibe-trading/agent/src/skills/factor-research/SKILL.md:95-103`
+  仍保留完整的「Orthogonalized Combination」章节，指引对因子做 Schmidt
+  正交化后再等权合成。cQuant 侧该路径已删除（A3-5 移除
+  `orthogonalize.py`），多因子合成统一走 `CrossSectionScorer._neutralize_factors`
+  残差投影。
+- **影响**：AI agent 阅读该 SKILL.md 会被误导，尝试调用后端已不存在的
+  Schmidt 正交化路径并失败；主仓正确指引见
+  [docs/user-guide/factor-research.md](docs/user-guide/factor-research.md)。
+- **处置**：主仓侧已在 user-guide 加注并清理残留引用（F5）；上游 issue
+  草案见 `docs/upstream/vibe-trading-orthogonalized-combination-issue.md`
+  （用户提交后回填链接至 PRD §F5）。上游无响应则另立决策是否本地分支。

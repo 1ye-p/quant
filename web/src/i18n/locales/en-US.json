@@ -2935,7 +2935,8 @@
       },
       "degraded": {
         "banner": "Some factor sets are unavailable ({{sources}}); related factors are not loaded",
-        "recover": "Recover with: "
+        "recover": "Recover with: ",
+        "recover_runtime": "Runtime load failure (not a missing submodule): check Python env dependencies and restart the server."
       },
       "empty": {
         "no_factor_data": "No factor data",

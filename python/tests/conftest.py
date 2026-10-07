@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 import os
+
+# ── Scheduler lock isolation (F3 review C1) ─────────────────────────────────
+# api_server.app's lifespan calls start_data_scheduler, which acquires the
+# REAL production lock (cwd-relative data/scheduler.lock) and holds the fd for
+# the rest of the pytest process. That both pollutes production (a scheduler
+# restart during a test run silently registers zero jobs) and makes tests
+# order-dependent (the second TestClient loses the lock). The lock path is
+# resolved at MODULE IMPORT time, so this must run before any test module
+# imports the app — conftest import time is exactly that moment.
+os.environ.setdefault("CQUANT_SCHEDULER_LOCK", "/tmp/cquant_pytest_scheduler.lock")
 from datetime import date
 from decimal import Decimal
 

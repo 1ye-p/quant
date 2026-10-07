@@ -24,6 +24,7 @@ read-only, count key tables and sample the newest rows.
 from __future__ import annotations
 
 import gzip
+import os
 import logging
 import shutil
 import time
@@ -108,30 +109,49 @@ def run_catalog_backup(
         if not db_path.exists():
             return {"error": f"catalog file not found: {db_path}"}
 
-        # 1. CHECKPOINT via the existing (write) handle so the file copy is
-        #    self-contained. Read-only handles cannot checkpoint — copy anyway.
-        if getattr(catalog, "read_only", False):
-            logger.info("Catalog backup: read-only handle, skipping CHECKPOINT")
-        else:
-            try:
-                catalog.checkpoint()
-            except Exception as exc:
-                logger.warning("Catalog backup: CHECKPOINT failed: %s", exc)
-
         backup_dir.mkdir(parents=True, exist_ok=True)
         dest = backup_dir / _backup_name(date.today())
-        tmp_dest = dest.with_suffix(".tmp")
+        tmp_dest = dest.with_suffix(".duckdb.tmp")
 
-        # 2. copy + gzip, retried exactly once
+        # Engine-consistent snapshot via DuckDB COPY FROM DATABASE. A raw
+        # copy2 of the live file is torn-risk: CHECKPOINT does not freeze the
+        # file, and the api host can commit writes during the ~3-minute copy
+        # of a 4GB catalog (F3 review I2). COPY FROM DATABASE is consistent
+        # under a concurrent writer handle. gzip lands on a .gz.tmp and is
+        # os.replace'd so an interrupted run never leaves a truncated file at
+        # the canonical name (review I3).
+        gz_tmp = dest.with_suffix(".gz.tmp")
         last_exc: Exception | None = None
         for attempt in (1, 2):
             try:
                 tmp_dest.unlink(missing_ok=True)
-                shutil.copy2(db_path, tmp_dest)
+                conn = getattr(catalog, "_get_conn", lambda: None)()
+                snap_ok = False
+                if conn is not None:
+                    # Engine-consistent snapshot into an attached destination
+                    # (safe under concurrent writers on the same connection).
+                    # The main database's catalog name is the file stem.
+                    try:
+                        conn.execute(f"ATTACH '{tmp_dest}' AS _cquant_backup")
+                        try:
+                            conn.execute(
+                                f"COPY FROM DATABASE {db_path.stem} TO _cquant_backup"
+                            )
+                            snap_ok = True
+                        finally:
+                            conn.execute("DETACH _cquant_backup")
+                    except Exception as exc:
+                        logger.warning(
+                            "Catalog backup: engine snapshot failed (%s); "
+                            "falling back to raw copy", exc,
+                        )
+                if not snap_ok:  # no handle or snapshot unsupported
+                    shutil.copy2(db_path, tmp_dest)
                 with open(tmp_dest, "rb") as fin, gzip.open(
-                    dest, "wb", compresslevel=6
+                    gz_tmp, "wb", compresslevel=6
                 ) as fout:
                     shutil.copyfileobj(fin, fout, length=8 * 1024 * 1024)
+                os.replace(gz_tmp, dest)
                 tmp_dest.unlink(missing_ok=True)
                 last_exc = None
                 break

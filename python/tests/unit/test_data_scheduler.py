@@ -177,6 +177,13 @@ class TestApiServerSchedulerRegistration:
         import sys
         import types
 
+        # Lock is process-isolated via conftest, but a same-process TestClient
+        # from an earlier test may already hold it — mock the acquire so this
+        # test depends on registration logic, not lock ordering (review C1).
+        from cquant.api_server import data_scheduler as _api_ds
+
+        monkeypatch.setattr(_api_ds, "acquire_scheduler_lock", lambda *a, **k: 123)
+
         added_jobs: list[dict] = []
         trigger_calls: list[dict] = []
 

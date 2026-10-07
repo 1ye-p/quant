@@ -2935,7 +2935,8 @@
       },
       "degraded": {
         "banner": "部分因子集不可用（{{sources}}），相关因子暂未加载",
-        "recover": "恢复命令："
+        "recover": "恢复命令：",
+        "recover_runtime": "运行时加载失败（非子模块缺失）：检查 Python 环境依赖后重启服务。"
       },
       "empty": {
         "no_factor_data": "暂无因子数据",

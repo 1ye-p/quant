@@ -148,7 +148,11 @@ export function FactorsPage() {
             })}
           </p>
           <p className="mt-1 font-mono">
-            {t('page.factors.degraded.recover')} git submodule update --init --recursive
+            {/* submodule missing → the recovery command helps; a load_zoo
+                exception needs different help, so surface the reason */}
+            {degradedSources.some(d => (d.reason ?? '').includes('load_zoo'))
+              ? t('page.factors.degraded.recover_runtime')
+              : <> {t('page.factors.degraded.recover')} git submodule update --init --recursive</>}
           </p>
         </div>
       )}

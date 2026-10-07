@@ -34,6 +34,7 @@
 | 2026-10-04 | Wiring batch1 | A1 财务 PIT 收口（D4-A 固定截止日+回填+端点）/ B4a gold_positions 修复（DDL+落盘+三端点恢复） |
 | 2026-10-05 | Wiring batch2 | B1 Brinson 归因读侧（端点三态+tab+DDL 归位）/ B2 信号明细（gold_bt_signal_details 落盘+端点+tab） |
 | 2026-10-05 | Wiring batch3 | A2 Combo 混编（透传/深度/抛错）/ A3 双轨统一（Top20%+v2 标记+missing 枚举+死代码）/ B4b 持仓可视化 / B3 研报 markdown 渲染 / A4 universe 接线 |
+| 2026-10-07 | 回归与红线收口 | F1 DSL universe 修复（初始化/覆盖提示/tags）/ F2 A1 回填闭环（生产空表验证 no-op）/ F3 调度单例锁+备份+演练 / F4 因子降级可见性 / F5 KNOWN_ISSUES+上游草案 |
 
 ---
 

@@ -119,45 +119,39 @@ __all__ = [
     "BUILTIN_FACTORS",
 ]
 
-# ── Vibe-Trading qlib158 因子（仅在 Vibe-Trading submodule 可用时注册）─────────
+# ── Vibe-Trading 因子 zoo（仅在 Vibe-Trading submodule 可用时注册）────────────
 import logging as _vibe_logging
 from cquant.vibe_bridge._compat import VIBE_AVAILABLE as _VIBE_AVAILABLE
 
-if _VIBE_AVAILABLE:
-    try:
-        from cquant.vibe_bridge.alpha_zoo import load_zoo as _load_zoo
-        _qlib158_factors = _load_zoo("qlib158")
-        BUILTIN_FACTORS.extend(_qlib158_factors)
-        _vibe_logging.getLogger(__name__).info(
-            "Registered %d qlib158 factors from Vibe-Trading", len(_qlib158_factors)
-        )
-    except Exception as _exc:
-        _vibe_logging.getLogger(__name__).warning(
-            "Failed to load qlib158 factors from Vibe-Trading: %s", _exc
-        )
+_VIBE_ZOOS = ("qlib158", "alpha101", "gtja191")
 
-# ── Vibe-Trading alpha101 因子 ─────────────────────────────────────────────────
-if _VIBE_AVAILABLE:
-    try:
-        _alpha101_factors = _load_zoo("alpha101")
-        BUILTIN_FACTORS.extend(_alpha101_factors)
-        _vibe_logging.getLogger(__name__).info(
-            "Registered %d alpha101 factors from Vibe-Trading", len(_alpha101_factors)
-        )
-    except Exception as _exc:
-        _vibe_logging.getLogger(__name__).warning(
-            "Failed to load alpha101 factors from Vibe-Trading: %s", _exc
-        )
+# F4 降级可见性：zoo 不可用/加载失败时的记录（source + reason），
+# 由 /factors/available 暴露给前端提示。
+_DEGRADED_SOURCES: list[dict] = []
 
-# ── Vibe-Trading gtja191 因子 ─────────────────────────────────────────────────
+
+def get_degraded_sources() -> list[dict]:
+    """返回降级因子源记录的拷贝（防外部修改内部状态）。"""
+    return [dict(d) for d in _DEGRADED_SOURCES]
+
+
 if _VIBE_AVAILABLE:
-    try:
-        _gtja191_factors = _load_zoo("gtja191")
-        BUILTIN_FACTORS.extend(_gtja191_factors)
+    for _zoo_name in _VIBE_ZOOS:
+        try:
+            from cquant.vibe_bridge.alpha_zoo import load_zoo as _load_zoo
+            _zoo_factors = _load_zoo(_zoo_name)
+            BUILTIN_FACTORS.extend(_zoo_factors)
+            _vibe_logging.getLogger(__name__).info(
+                "Registered %d %s factors from Vibe-Trading", len(_zoo_factors), _zoo_name
+            )
+        except Exception as _exc:
+            _DEGRADED_SOURCES.append({"source": _zoo_name, "reason": str(_exc)[:200]})
+            _vibe_logging.getLogger(__name__).warning(
+                "Failed to load %s factors from Vibe-Trading: %s", _zoo_name, _exc
+            )
+else:
+    for _zoo_name in _VIBE_ZOOS:
+        _DEGRADED_SOURCES.append({"source": _zoo_name, "reason": "submodule_unavailable"})
         _vibe_logging.getLogger(__name__).info(
-            "Registered %d gtja191 factors from Vibe-Trading", len(_gtja191_factors)
-        )
-    except Exception as _exc:
-        _vibe_logging.getLogger(__name__).warning(
-            "Failed to load gtja191 factors from Vibe-Trading: %s", _exc
+            "Vibe-Trading submodule unavailable; skipping %s factor zoo", _zoo_name
         )

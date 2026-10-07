@@ -33,9 +33,15 @@ export interface FactorCategory {
   factors: string[]
 }
 
+export interface DegradedFactorSource {
+  source: string
+  reason: string
+}
+
 export interface AvailableFactorsResponse {
   factors: AvailableFactor[]
   categories: FactorCategory[]
+  degraded_sources?: DegradedFactorSource[]
 }
 
 // ── Factor template types ───────────────────────────────────────────────────

@@ -2933,6 +2933,10 @@
         "low_ic_count": "{{count}} factors with IC below threshold",
         "threshold": "Threshold:"
       },
+      "degraded": {
+        "banner": "Some factor sets are unavailable ({{sources}}); related factors are not loaded",
+        "recover": "Recover with: "
+      },
       "empty": {
         "no_factor_data": "No factor data",
         "no_search_result": "No factors found containing \"{{keyword}}\"",

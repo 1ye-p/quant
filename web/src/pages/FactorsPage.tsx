@@ -48,6 +48,14 @@ export function FactorsPage() {
     queryFn: () => factorAnalyticsApi.versions(),
   })
 
+  // F4: degraded factor-set visibility (zoo unavailable / load failure)
+  const { data: available } = useQuery({
+    queryKey: ['factors', 'available'],
+    queryFn: () => factorAnalyticsApi.getAvailable(),
+    staleTime: 5 * 60_000,
+  })
+  const degradedSources = available?.degraded_sources ?? []
+
   const { data: icStatus } = useQuery({
     queryKey: ['factors', 'ic-status', featureSetVersion, icThreshold],
     queryFn: () => factorAnalyticsApi.icStatus({
@@ -130,6 +138,20 @@ export function FactorsPage() {
     <div>
       <h1 className="page-title">{t('page.factors.title')}</h1>
       <p className="page-subtitle">{t('page.factors.subtitle')}</p>
+
+      {/* F4: degraded factor-set banner (zoo unavailable / load failure) */}
+      {degradedSources.length > 0 && (
+        <div className="mb-4 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+          <p>
+            {t('page.factors.degraded.banner', {
+              sources: degradedSources.map(d => d.source).join(', '),
+            })}
+          </p>
+          <p className="mt-1 font-mono">
+            {t('page.factors.degraded.recover')} git submodule update --init --recursive
+          </p>
+        </div>
+      )}
 
       {/* Feature Set selector */}
       <div className="flex gap-3 mb-4">

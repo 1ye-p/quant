@@ -29,6 +29,11 @@ vi.mock('@/lib/api', () => ({
     versions: vi.fn().mockResolvedValue({
       items: [{ feature_set_version: 'v1_20260101', start_date: '2024-01-01', end_date: '2026-01-01', row_count: 100000 }],
     }),
+    getAvailable: vi.fn().mockResolvedValue({
+      factors: [],
+      categories: [],
+      degraded_sources: [],
+    }),
     icStatus: vi.fn().mockResolvedValue({
       items: [
         { factor_name: 'ret_5d', mean_ic: 0.05, ir: 0.8, hit_rate: 0.55, is_alert: false, alert_message: null },
@@ -192,6 +197,35 @@ describe('FactorsPage', () => {
   it('shows feature set version selector', () => {
     renderWithProviders(<FactorsPage />)
     expect(screen.getByDisplayValue('选择 Feature Set 版本')).toBeInTheDocument()
+  })
+
+  it('does not render degraded banner when no degraded sources', async () => {
+    renderWithProviders(<FactorsPage />)
+    await waitFor(() => {
+      expect(screen.getAllByText('ret_5d').length).toBeGreaterThanOrEqual(1)
+    })
+    expect(screen.queryByText(/部分因子集不可用/)).not.toBeInTheDocument()
+  })
+})
+
+describe('FactorsPage Degraded Sources', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('shows amber banner with source names and recovery command when degraded', async () => {
+    const { factorAnalyticsApi } = await import('@/lib/api')
+    vi.mocked(factorAnalyticsApi.getAvailable).mockResolvedValue({
+      factors: [],
+      categories: [],
+      degraded_sources: [
+        { source: 'qlib158', reason: 'submodule_unavailable' },
+        { source: 'gtja191', reason: 'submodule_unavailable' },
+      ],
+    })
+    renderWithProviders(<FactorsPage />)
+    await waitFor(() => {
+      expect(screen.getByText(/部分因子集不可用（qlib158, gtja191）/)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/git submodule update --init --recursive/)).toBeInTheDocument()
   })
 })
 

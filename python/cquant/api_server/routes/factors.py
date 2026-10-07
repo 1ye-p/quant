@@ -1285,12 +1285,16 @@ async def list_available_factors(catalog: CatalogDep) -> dict:
         {"name": cat, "label_zh": cat, "label_en": cat, "factors": names}
         for cat, names in sorted(category_map.items())
     ]
+    # F4 降级可见性：zoo 不可用/加载失败时前端提示所需（正常态为空列表）
+    from cquant.factorlab.factors import get_degraded_sources
+
     return {
         "factors": items,
         "items": items,
         "categories": categories,
         "reference_factors": reference_factors,
         "total": len(items),
+        "degraded_sources": get_degraded_sources(),
     }
 
 
